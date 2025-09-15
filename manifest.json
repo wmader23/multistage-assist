@@ -3,7 +3,9 @@
     "name": "Multi-Stage Assist",
     "version": "0.1.1",
     "documentation": "https://github.com/kr0ner/multistage-assist",
-    "requirements": [],
+    "requirements": [
+        "spacy>=3.7.2"
+    ],
     "dependencies": ["conversation"],
     "codeowners": ["@kr0ner"],
     "config_flow": true,
