@@ -7,6 +7,8 @@ import dataclasses
 from homeassistant.helpers import intent, area_registry, entity_registry
 from homeassistant.components import conversation
 from hassil.recognize import recognize_best
+from .ollama_client import Stage, query_ollama
+from .prompts import ENTITY_DISAMBIGUATION_PROMPT, CLARIFICATION_PROMPT
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -66,7 +68,7 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
         return await self.hass.async_add_executor_job(_run_recognizer)
 
     async def _resolve_entities(self, entities: dict[str, str]) -> ResolvedEntities:
-        """Resolve slots into entity_ids (clustered by area vs. name)."""
+        """Resolve slots into entity_ids (by area and by name)."""
         ent_reg = entity_registry.async_get(self.hass)
         area_reg = area_registry.async_get(self.hass)
 
@@ -83,54 +85,21 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
 
             # Match by area
             if area_name:
-                area_id = ent.area_id
-                if not area_id:
-                    continue
-                area = area_reg.async_get_area(area_id)
-                if area and area.name.lower() == area_name.lower():
-                    by_area.append(ent.entity_id)
+                if ent.area_id:
+                    area = area_reg.async_get_area(ent.area_id)
+                    if area and area.name.lower() == area_name.lower():
+                        by_area.append(ent.entity_id)
 
             # Match by name
             if name and ent.original_name and name.lower() in ent.original_name.lower():
                 by_name.append(ent.entity_id)
 
-        # ---- fallback: match area_name against entity name ----
-        if area_name and not by_area:
-            for ent in ent_reg.entities.values():
-                if domain and ent.domain != domain:
-                    continue
-                if ent.original_name and area_name.lower() in ent.original_name.lower():
-                    by_name.append(ent.entity_id)
-
         return ResolvedEntities(by_area=by_area, by_name=by_name)
-
-    async def _execute_intent(
-        self,
-        intent_name: str,
-        entities: dict[str, str],
-        language: str,
-        user_input: conversation.ConversationInput,
-    ) -> conversation.ConversationResult:
-        """Execute HA intent via async_handle with rewritten slots."""
-        slots = {k: {"value": v} for k, v in entities.items()}
-
-        resp = await intent.async_handle(
-            self.hass,
-            platform="conversation",
-            intent_type=intent_name,
-            slots=slots,
-            text_input=user_input.text,
-            context=user_input.context,
-            language=language,
-            conversation_agent_id="multistage_assist",
-        )
-
-        return conversation.ConversationResult(response=resp)
 
     async def async_process(
         self, user_input: conversation.ConversationInput
     ) -> conversation.ConversationResult:
-        """Process user input with multi-stage routing, probing HA NLU first."""
+        """Stage 0: Dry run + minimal routing."""
         utterance = user_input.text
         language = user_input.language or "de"
         _LOGGER.info("Received utterance: %s", utterance)
@@ -138,11 +107,11 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
         try:
             # ---- STEP 1: Dry-run recognition ----
             result = await self._dry_run_recognize(utterance, language, user_input)
-            if not result:
-                _LOGGER.info("Dry-run did not recognize -> Stage 2 fallback")
-                return await self._call_stage2_llm(user_input)
+            if not result or not result.intent:
+                _LOGGER.info("Dry-run failed -> Stage 1 clarification")
+                return await self._call_stage1_clarification(user_input)
 
-            # ---- Debug logging ----
+            # Debug logging
             try:
                 result_dict = {
                     "intent": result.intent.name if result.intent else None,
@@ -158,56 +127,22 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
 
             resolved = await self._resolve_entities(entities)
             _LOGGER.debug(
-                "Dry-run resolved entity_ids (by_area=%s, by_name=%s, merged=%s)",
+                "Resolved entity_ids (by_area=%s, by_name=%s, merged=%s)",
                 resolved.by_area,
                 resolved.by_name,
                 resolved.merged,
             )
 
-            # ---- STEP 2: Ambiguity handling ----
+            # ---- STEP 2: Routing ----
             if not resolved.merged:
                 _LOGGER.info("No entities resolved -> Stage 1 clarification")
                 return await self._call_stage1_clarification(user_input, result)
 
             if len(resolved.merged) > 1:
-                # Special case: "all lights"/"alle lichter"
-                if (
-                    entities.get("domain") in ("light", "fan", "cover")
-                    and not entities.get("name")
-                    and not entities.get("area")
-                ):
-                    _LOGGER.info(
-                        "Multiple matches but global domain request -> executing all"
-                    )
-                else:
-                    _LOGGER.info("Multiple matches -> Stage 1 disambiguation")
-                    return await self._call_stage1_disambiguation(
-                        user_input, resolved.merged
-                    )
+                _LOGGER.info("Multiple matches -> Stage 1 disambiguation")
+                return await self._call_stage1_disambiguation(user_input, resolved.merged)
 
             # ---- STEP 3: Execution ----
-            if resolved.by_name and not resolved.by_area:
-                # Fallback by name → rewrite entities to valid slots
-                entities.pop("area", None)
-                entities.pop("domain", None)
-
-                ent_reg = entity_registry.async_get(self.hass)
-                ent = ent_reg.async_get(resolved.by_name[0])
-                friendly_name = (
-                    ent.original_name or ent.name or resolved.by_name[0]
-                )
-
-                entities.clear()
-                entities["name"] = friendly_name
-                _LOGGER.debug(
-                    "Rewriting entities for execution (fallback by name): %s", entities
-                )
-
-                return await self._execute_intent(
-                    result.intent.name, entities, language, user_input
-                )
-
-            # Normal NLU → let HA handle it
             return await conversation.async_converse(
                 self.hass,
                 text=utterance,
@@ -218,7 +153,7 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
             )
 
         except Exception as err:
-            _LOGGER.warning("NLU probe failed: %s", err)
+            _LOGGER.warning("Stage 0 failed: %s", err)
             return await self._call_stage2_llm(user_input)
 
     async def _make_placeholder_result(
@@ -232,14 +167,24 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
 
     # ---- Stage helpers ----
     async def _call_stage1_clarification(self, user_input, resp=None):
-        msg = "Stage 1 clarification called"
-        _LOGGER.debug(msg)
-        return await self._make_placeholder_result(msg, language=user_input.language)
+        resp_text = await query_ollama(
+            self.config,
+            Stage.STAGE1,
+            system_prompt=CLARIFICATION_PROMPT,
+            prompt=user_input.text,
+        )
+        _LOGGER.debug(resp_text)
+        return await self._make_placeholder_result(resp_text, language=user_input.language)
 
     async def _call_stage1_disambiguation(self, user_input, entity_ids: list[str]):
-        msg = f"Stage 1 disambiguation: mehrere Geräte gefunden {entity_ids}"
-        _LOGGER.debug(msg)
-        return await self._make_placeholder_result(msg, language=user_input.language)
+        resp_text = await query_ollama(
+            self.config,
+            Stage.STAGE1,
+            system_prompt=ENTITY_DISAMBIGUATION_PROMPT,
+            prompt=user_input.text + " " + str(entity_ids),
+        )
+        _LOGGER.debug(resp_text)
+        return await self._make_placeholder_result(resp_text, language=user_input.language)
 
     async def _call_stage2_llm(self, user_input, resp=None):
         msg = "Stage 2 LLM called"
