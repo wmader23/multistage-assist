@@ -69,11 +69,25 @@ class PromptExecutor:
 
         for stage in self.escalation_path:
             result = await self._execute(stage, system_prompt, context, temperature)
-            if result and self._validate_schema(result, schema):
+
+            if result is None:
+                _LOGGER.info("Stage %s returned None (execution/parsing error), escalating...", stage.name)
+                continue
+
+            if self._validate_schema(result, schema):
+                _LOGGER.debug("Stage %s validated successfully against schema: %s", stage.name, schema)
                 context.update(result)
                 return result
-            _LOGGER.info("Stage %s unable to handle, escalating...", stage.name)
 
+            _LOGGER.info(
+                "Stage %s produced output but did not satisfy schema. "
+                "Required=%s, Got=%s",
+                stage.name,
+                (schema or {}).get("required"),
+                result,
+            )
+
+        _LOGGER.warning("All stages exhausted without valid result for prompt.")
         return {}
 
     @staticmethod
@@ -85,7 +99,11 @@ class PromptExecutor:
     def _validate_schema(result: dict[str, Any], schema: dict | None) -> bool:
         if not schema:
             # fallback: require at least "message"
-            return "message" in result
+            return isinstance(result, dict) and "message" in result
+
+        if not isinstance(result, dict):
+            return False
+
         for key in schema.get("required", []):
             if key not in result:
                 return False
