@@ -48,7 +48,16 @@ class OllamaClient:
             "options": {"num_ctx": 1024, "temperature": temperature},
         }
 
-        _LOGGER.debug("Querying Ollama at %s with model=%s", url, model)
+        # 🔎 Log full payload for debugging
+        try:
+            import json
+            _LOGGER.debug(
+                "Querying Ollama at %s with payload:\n%s",
+                url,
+                json.dumps(payload, ensure_ascii=False, indent=2),
+            )
+        except Exception as e:
+            _LOGGER.debug("Failed to serialize payload for logging: %s", e)
 
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=60) as resp:

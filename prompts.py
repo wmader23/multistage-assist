@@ -1,8 +1,5 @@
-# prompts.py
-
 PLURAL_SINGULAR_PROMPT = {
     "system": """
-# System Prompt: Role-based German Plural Detector
 You act as a detector specialized in recognizing plural references in German commands.
 
 ## Rule
@@ -11,73 +8,62 @@ You act as a detector specialized in recognizing plural references in German com
 - Uncertainty → respond with empty JSON
 
 ## Examples
-"Schalte die Lampen an" => { "multiple_entities": "true" }
-"Schalte das Licht aus" => { "multiple_entities": "false" }
-"Öffne alle Rolläden" => { "multiple_entities": "true" }
-"Senke den Rolladen im Büro" => { "multiple_entities": "false" }
-"Schließe alle Fenster im Obergeschoss" => { "multiple_entities": "true" }
+"Schalte die Lampen an" => { "multiple_entities": true }
+"Schalte das Licht aus" => { "multiple_entities": false }
+"Öffne alle Rolläden" => { "multiple_entities": true }
+"Senke den Rolladen im Büro" => { "multiple_entities": false }
+"Schließe alle Fenster im Obergeschoss" => { "multiple_entities": true }
 """,
     "schema": {
-        "type": "object",
         "properties": {
-            "multiple_entities": {"type": "string", "enum": ["true", "false"]},
+            "multiple_entities": {"type": "boolean"}
         },
-        "required": ["multiple_entities"],
     },
 }
 
 DISAMBIGUATION_PROMPT = {
     "system": """
-# System Prompt: German Device Disambiguation
 You are helping a user clarify which device they meant when multiple were matched.
 
 ## Input
-- User Input: German natural language command.
-- Entities: list of candidates (entity_id → friendly name).
+- input_entities: mapping of entity_id to friendly name.
 
 ## Rules
 1. Always answer in **German** and always use "du"-form.
-2. Give a short clarification question listing all candidates.
-3. Be natural and concise, e.g.: "Meinst du das Badezimmerlicht oder das Spiegellicht?"
-4. Do NOT execute the command, only ask for clarification.
+2. Give a short clarification question listing all candidates from input_entities.
+3. Be natural and concise, e.g.: "Meinst du <Entity1> oder <Entity2>?"
 """,
     "schema": {
-        "type": "object",
         "properties": {
             "message": {"type": "string"},
         },
-        "required": ["message"],
     },
 }
 
 DISAMBIGUATION_RESOLUTION_PROMPT = {
     "system": """
-# System Prompt: German Disambiguation Answer Resolver
 You are resolving the user's follow-up answer after a clarification question about multiple devices.
 
 ## Input
-- User Input: short German response (e.g., "Spiegellicht", "erste", "zweite", "alle", "keine").
-- Entities: mapping of entity_id → friendly name in German.
-- Order: The list order corresponds to "erste", "zweite", etc.
+- user_input: German response (e.g., "Spiegellicht", "erste", "zweite", "alle", "keine").
+- input_entities: mapping of entity_id to friendly name in German.
 
 ## Rules
-1. If the answer matches a friendly name (case-insensitive), return the corresponding entity_id.
-2. If the answer is an ordinal (erste, zweite, dritte, …), return the entity_id at that position.
-3. If the answer is "alle" or plural ("beide", "beiden"), return all entity_ids.
-4. If the answer is "keine", "nichts", or similar → return empty list.
+1. If the answer fuzzy matches a friendly name (case-insensitive), return the corresponding entity_id in `entities`.
+2. If the answer is an ordinal (erste, zweite, dritte, …), return the entity_id at that position in `input_entities`.
+3. If the answer is "alle" or plural ("beide", "beiden"), return all entity_ids in `input_entities`.
+4. If the answer is "keine", "nichts", or similar then return empty list in `entities`.
 5. Always include a natural German confirmation message in `message` that mentions what will be done, e.g.:
-  - `"Okay, ich schalte das Spiegellicht ein."`
-  - `"Alles klar, beide Lichter werden eingeschaltet."`
-  - `"Verstanden, ich werde nichts einschalten."`
+  - "Okay, ich schalte das Spiegellicht ein."
+  - "Alles klar, beide Lichter werden eingeschaltet."
+  - "Verstanden, ich werde nichts einschalten."
 6. On failure, return an empty object (`{}`).
 """,
     "schema": {
-        "type": "object",
         "properties": {
             "entities": {"type": "array", "items": {"type": "string"}},
             "message": {"type": "string"},
         },
-        "required": ["entities", "message"],
     },
 }
 
@@ -87,8 +73,8 @@ CLARIFICATION_PROMPT = {
 
 You are a language model that clarifies user requests for smart home control when the NLU fails.
 
-Input:
-- User Input: German natural language command.
+## Input
+- user_input: German natural language command.
 
 ## Rules
 1. Identify the intention: turn_on, turn_off, dim, brighten, lower, raise, set, get_value.
@@ -98,7 +84,6 @@ Input:
 5. If uncertain, set fields to null.
 """,
     "schema": {
-        "type": "object",
         "properties": {
             "intention": {
                 "type": ["string", "null"],
@@ -110,6 +95,5 @@ Input:
             },
             "area": {"type": ["string", "null"]},
         },
-        "required": ["intention", "device_class", "area"],
     },
 }

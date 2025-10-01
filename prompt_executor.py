@@ -80,10 +80,8 @@ class PromptExecutor:
                 return result
 
             _LOGGER.info(
-                "Stage %s produced output but did not satisfy schema. "
-                "Required=%s, Got=%s",
+                "Stage %s produced output but did not satisfy schema. Got=%s",
                 stage.name,
-                (schema or {}).get("required"),
                 result,
             )
 
@@ -92,36 +90,52 @@ class PromptExecutor:
 
     @staticmethod
     def _schema_to_prompt(schema: dict) -> str:
-        """Convert a JSON schema into a clear 'Output format' block for the LLM."""
-        props = schema.get("properties", {})
-        required = schema.get("required", [])
+        """Emit a clear 'Output format' block with field names and types, no examples."""
+        props = (schema or {}).get("properties", {})
+        if not props:
+            return ""
 
         lines = ["\n\n## Output format", "Return ONLY a JSON object with the following fields:"]
-
-        for key, val in props.items():
-            typ = val.get("type", "string")
-            enum = val.get("enum")
-            if enum:
-                lines.append(f'- "{key}": one of {enum}')
+        for key, spec in props.items():
+            typ = spec.get("type", "string")
+            if typ == "array":
+                item_type = spec.get("items", {}).get("type", "string")
+                lines.append(f'- "{key}": array of {item_type}s')
             else:
                 lines.append(f'- "{key}": {typ}')
-            if key in required:
-                lines[-1] += " (required)"
-
         return "\n".join(lines)
+
 
     @staticmethod
     def _validate_schema(result: dict[str, Any], schema: dict | None) -> bool:
-        if not schema:
-            # fallback: require at least "message"
-            return isinstance(result, dict) and "message" in result
-
         if not isinstance(result, dict):
             return False
+        if not schema:
+            # No schema → accept non-empty dicts
+            return True
 
-        for key in schema.get("required", []):
+        props = schema.get("properties", {}) or {}
+        if not props:
+            return True
+
+        # All declared properties are implicitly required now
+        for key, spec in props.items():
             if key not in result:
                 return False
+            if not isinstance(spec, dict):
+                continue
+            typ = spec.get("type")
+            if typ == "boolean" and not isinstance(result[key], bool):
+                return False
+            if typ == "string" and not isinstance(result[key], str):
+                return False
+            if typ == "array":
+                if not isinstance(result[key], list):
+                    return False
+                item_spec = spec.get("items", {})
+                item_type = item_spec.get("type")
+                if item_type == "string" and not all(isinstance(x, str) for x in result[key]):
+                    return False
         return True
 
     async def _execute(

@@ -66,7 +66,7 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
     async def _is_plural(self, text: str) -> bool | None:
         context = {"user_input": text}
         data = await self.prompts.run(PLURAL_SINGULAR_PROMPT, context)
-        is_plural = bool(data and data.get("multiple_entities") == "true")
+        is_plural = bool(data and data.get("multiple_entities"))
         _LOGGER.debug("Plural detection for '%s' -> %s (raw=%s)", text, is_plural, data)
         return is_plural
 
@@ -102,7 +102,7 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
             _LOGGER.info("Plural detected; delegating to default agent with original utterance.")
             return await self._delegate_to_default_agent(user_input)
 
-        context = {"user_input": user_input.text, "entities": entity_map}
+        context = {"input_entities": entity_map}
         data = await self.prompts.run(DISAMBIGUATION_PROMPT, context)
         _LOGGER.debug("Disambiguation prompt output: %s", data)
 
@@ -110,7 +110,6 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
         self._pending_disambiguation[key] = {
             "intent": intent,
             "candidates": entity_map,
-            "order": entity_ids,
         }
         _LOGGER.debug(
             "Saved pending disambiguation state for %s: %s",
@@ -132,8 +131,7 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
 
         context = {
             "user_input": user_input.text,
-            "entities": pending["candidates"],
-            "order": pending.get("order", []),
+            "input_entities": pending["candidates"],
         }
         _LOGGER.debug("Resolution context: %s", context)
 
@@ -179,49 +177,47 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
         if intent_obj:
             try:
                 intent_name = getattr(intent_obj, "name", None)
+                responses = []
 
-                # ✅ Build slots in HA format
-                if len(entities) == 1:
-                    slots: Dict[str, Dict[str, Any]] = {"name": {"value": entities[0]}}
-                else:
-                    slots = {"name": {"value": entities}}
+                for eid in entities:
+                    slots: Dict[str, Any] = {"name": {"value": eid}}
 
-                # Drop broad conflicts
-                for conflict in ("domain", "area", "floor"):
-                    if conflict in slots:
-                        _LOGGER.debug("Removing conflicting slot: %s", conflict)
-                        del slots[conflict]
+                    # Drop broad conflicts
+                    for conflict in ("domain", "area", "floor"):
+                        if conflict in slots:
+                            _LOGGER.debug("Removing conflicting slot: %s", conflict)
+                            del slots[conflict]
 
-                _LOGGER.debug(
-                    "Executing patched intent '%s' with slots=%s",
-                    intent_name,
-                    slots,
-                )
+                    _LOGGER.debug(
+                        "Executing patched intent '%s' with slots=%s",
+                        intent_name,
+                        slots,
+                    )
 
-                resp = await intent.async_handle(
-                    self.hass,
-                    platform="conversation",
-                    intent_type=intent_name,
-                    slots=slots,
-                    text_input=user_input.text,
-                    context=user_input.context,
-                    language=user_input.language or "de",
-                )
+                    resp = await intent.async_handle(
+                        self.hass,
+                        platform="conversation",
+                        intent_type=intent_name,
+                        slots=slots,
+                        text_input=user_input.text,
+                        context=user_input.context,
+                        language=user_input.language or "de",
+                    )
+                    responses.append(resp)
 
-                # ✅ Always ensure speech is set
-                if not resp.speech:
+                # ✅ Use last response, patch speech if needed
+                final_resp = responses[-1]
+                if not final_resp.speech:
                     if message:
-                        resp.async_set_speech(message)
+                        final_resp.async_set_speech(message)
                     else:
-                        # fallback if even LLM gave no message
-                        if len(entities) == 1:
-                            pretty = pending["candidates"].get(entities[0], entities[0])
-                            resp.async_set_speech(f"Okay, ich schalte {pretty} ein.")
-                        else:
-                            resp.async_set_speech("Okay, ich habe die Geräte geschaltet.")
+                        pretty = ", ".join(
+                            pending["candidates"].get(eid, eid) for eid in entities
+                        )
+                        final_resp.async_set_speech(f"Okay, ich schalte {pretty} ein.")
 
                 return conversation.ConversationResult(
-                    response=resp,
+                    response=final_resp,
                     conversation_id=user_input.conversation_id,
                     continue_conversation=False,
                 )
