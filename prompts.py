@@ -101,7 +101,7 @@ You are a model that resolves ambiguous smart home sensor queries in German.
         "properties": {
             "entities": {"type": "array", "items": {"type": "string"}},
             "function": {"type": ["string", "null"]},
-            "message": {"type": ["string", "null"]},
+            "message": {"type": "string"},
         },
     },
 }
@@ -131,18 +131,32 @@ You are resolving the user's follow-up answer after a clarification question abo
 
 ## Input
 - user_input: German response (e.g., "Spiegellicht", "erste", "zweite", "alle", "keine").
-- input_entities: mapping of entity_id to friendly name in German.
+- input_entities: ordered list of objects, each with:
+  - "entity_id": string
+  - "name": friendly name (in German)
 
 ## Rules
 1. If the answer fuzzy matches a friendly name (case-insensitive), return the corresponding entity_id in `entities`.
-2. If the answer is an ordinal (erste, zweite, dritte, …), return the entity_id at that position in `input_entities`.
+2. If the answer is an ordinal (erste, zweite, dritte, …, letzte), return the corresponding entity_id from the input_entities at the given index.
 3. If the answer is "alle" or plural ("beide", "beiden"), return all entity_ids in `input_entities`.
 4. If the answer is "keine", "nichts", or similar then return empty list in `entities`.
-5. Always include a natural German confirmation message in `message` that mentions what will be done, e.g.:
-  - "Okay, ich schalte das Spiegellicht ein."
-  - "Alles klar, beide Lichter werden eingeschaltet."
-  - "Verstanden, ich werde nichts einschalten."
+5. `message` must always include a natural German confirmation that mentions what will be done.
 6. On failure, return an empty object (`{}`).
+
+## Examples
+Input:
+{
+  "user_input": "Spiegellicht",
+  "input_entities": [
+    {"entity_id": "light.badezimmer_spiegel", "name": "Badezimmer Spiegel"},
+    {"entity_id": "light.badezimmer", "name": "Badezimmer"}
+  ]
+}
+Output:
+{
+  "entities": ["light.badezimmer_spiegel"],
+  "message": "Okay, ich schalte das Spiegellicht ein."
+}
 """,
     "schema": {
         "properties": {

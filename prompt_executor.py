@@ -110,7 +110,7 @@ class PromptExecutor:
         if not props:
             return ""
 
-        lines = ["\n\n## Output format", "Return ONLY a JSON object with the following fields:"]
+        lines = ["\n\n## Output format", "Return ONLY a JSON object with all of the following fields that are not null:"]
         for key, spec in props.items():
             typ = spec.get("type", "string")
             if typ == "array":
