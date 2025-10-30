@@ -1,18 +1,74 @@
+import re
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from .base import Capability
 
 _LOGGER = logging.getLogger(__name__)
 
+# --- Common singular → plural mapping for smart home entities ---
+# Articles are added **only** where singular == plural (e.g. Fenster, Lautsprecher)
+_ENTITY_PLURALS = {
+    "licht": "lichter",
+    "lampe": "lampen",
+    "rollladen": "rollläden",
+    "rollo": "rollos",
+    "jalousie": "jalousien",
+    "das fenster": "die fenster",            # article-based disambiguation
+    "tür": "türen",
+    "tor": "tore",
+    "steckdose": "steckdosen",
+    "heizung": "heizungen",
+    "ventilator": "ventilatoren",
+    "der lautsprecher": "die lautsprecher",  # article-based disambiguation
+    "gerät": "geräte",
+}
+
+# --- Quantifier or numeric plural cues ---
+_PLURAL_CUES = {
+    "alle", "sämtliche", "mehrere", "beide", "beiden", "viele", "verschiedene"
+}
+
+# --- Number words (for numeric plurals like "zwei Lampen") ---
+_NUM_WORDS = {
+    "zwei", "drei", "vier", "fünf", "sechs", "sieben",
+    "acht", "neun", "zehn", "elf", "zwölf"
+}
+
+_NUMERIC_PATTERN = re.compile(r"\b\d+\b")
+
+
+def _fast_plural(user_text: Optional[str]) -> Optional[Dict[str, bool]]:
+    """Fast, rule-based plural detection using article-aware mappings."""
+    if not user_text:
+        return None
+
+    t = user_text.lower().strip()
+
+    # 1️⃣ Quantifier or numeric plural cues
+    if any(cue in t for cue in _PLURAL_CUES):
+        return {"multiple_entities": True}
+    if any(num in t for num in _NUM_WORDS) or _NUMERIC_PATTERN.search(t):
+        return {"multiple_entities": True}
+
+    # 2️⃣ Direct mapping check
+    for singular, plural in _ENTITY_PLURALS.items():
+        if plural in t:
+            return {"multiple_entities": True}
+        if singular in t:
+            return {"multiple_entities": False}
+
+    # 3️⃣ Nothing matched → inconclusive
+    return None
+
 
 class PluralDetectionCapability(Capability):
-    """Detect whether the command refers to multiple entities."""
+    """Detect whether a command refers to multiple entities (mapping-based fast path)."""
 
     name = "plural_detection"
-    description = "Detect plural or collective references like 'alle Lampen'."
+    description = "Detect plural references in German smart-home commands."
 
     PROMPT = {
-    "system": """
+        "system": """
 You act as a detector specialized in recognizing plural references in German commands.
 
 ## Rule
@@ -35,5 +91,12 @@ You act as a detector specialized in recognizing plural references in German com
     }
 
     async def run(self, user_input, **_: Any) -> Dict[str, Any]:
-        _LOGGER.debug("[PluralDetection] Checking plurality: %s", user_input.text)
+        _LOGGER.debug("[PluralDetection] Checking plurality (fast-path): %s", user_input.text)
+
+        fast = _fast_plural(user_input.text)
+        if fast is not None:
+            _LOGGER.debug("[PluralDetection] Fast-path result: %s", fast)
+            return fast
+
+        _LOGGER.debug("[PluralDetection] Fast-path inconclusive → LLM fallback")
         return await self._safe_prompt(self.PROMPT, {"user_input": user_input.text})
