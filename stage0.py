@@ -8,6 +8,7 @@ from homeassistant.helpers import intent
 
 from .base_stage import BaseStage
 from .capabilities.entity_resolver import EntityResolverCapability
+from .capabilities.intent_executor import IntentExecutorCapability
 from .conversation_utils import error_response
 from .stage_result import Stage0Result
 
@@ -110,38 +111,29 @@ class Stage0Processor(BaseStage):
             _LOGGER.debug("[Stage0] No concrete targets resolved → escalate.")
             return {"status": "escalate", "result": result}
 
-        # Single, known Hass intent → execute directly through HA agent
-        if len(resolved_ids) == 1 and intent_name and intent_name.startswith("Hass"):
+        # Single, registered intent → execute directly via capability
+        if len(resolved_ids) == 1 and intent_name:
             try:
                 _LOGGER.debug(
-                    "[Stage0] Direct execution path: intent='%s', single target=%s → delegating to HA agent.",
+                    "[Stage0] Direct execution path: intent='%s', single target=%s → delegating to IntentExecutorCapability.",
                     intent_name,
                     resolved_ids[0],
                 )
-                agent = conversation.async_get_agent(self.hass)
-                exec_result = await agent.async_handle_intents(user_input)
+                executor = IntentExecutorCapability(self.hass, self.config)
+                exec_data = await executor.run(
+                    user_input,
+                    intent_name=intent_name,
+                    entity_ids=resolved_ids,
+                    language=user_input.language or "de",
+                )
 
-                if isinstance(exec_result, conversation.ConversationResult):
-                    _LOGGER.debug("[Stage0] Agent returned ConversationResult → handled.")
-                    return {"status": "handled", "result": exec_result}
+                if exec_data and exec_data.get("result"):
+                    _LOGGER.debug("[Stage0] Intent executed successfully via capability.")
+                    return {"status": "handled", "result": exec_data["result"]}
 
-                if isinstance(exec_result, intent.IntentResponse):
-                    _LOGGER.debug("[Stage0] Agent returned IntentResponse → wrapped as ConversationResult.")
-                    conv_result = conversation.ConversationResult(
-                        response=exec_result,
-                        conversation_id=user_input.conversation_id,
-                        continue_conversation=True,
-                    )
-                    return {"status": "handled", "result": conv_result}
+                _LOGGER.warning("[Stage0] Intent execution returned no result → escalate.")
+                return {"status": "escalate", "result": result}
 
-                _LOGGER.error("[Stage0] Unexpected response type from agent: %r", type(exec_result))
-                return {
-                    "status": "error",
-                    "result": await error_response(
-                        user_input,
-                        "Fehler: Unerwarteter Antworttyp vom Intent-Handler.",
-                    ),
-                }
             except Exception as err:
                 _LOGGER.exception("[Stage0] Intent execution crashed: %s", err)
                 return {

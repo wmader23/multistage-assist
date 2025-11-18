@@ -8,6 +8,7 @@ from .capabilities.disambiguation import DisambiguationCapability
 from .capabilities.disambiguation_select import DisambiguationSelectCapability
 from .capabilities.plural_detection import PluralDetectionCapability
 from .capabilities.intent_confirmation import IntentConfirmationCapability
+from .capabilities.intent_executor import IntentExecutorCapability
 from .conversation_utils import make_response, error_response, with_new_text
 from .stage_result import Stage0Result
 
@@ -24,6 +25,7 @@ class Stage1Processor(BaseStage):
         DisambiguationSelectCapability,
         PluralDetectionCapability,
         IntentConfirmationCapability,
+        IntentExecutorCapability,
     ]
 
     def __init__(self, hass, config):
@@ -59,22 +61,22 @@ class Stage1Processor(BaseStage):
             original_text = pending.get("raw") or user_input.text
 
             try:
-                responses = []
-                for eid in selected:
-                    slots = {"name": {"value": eid}}
-                    _LOGGER.debug("[Stage1] Executing action intent '%s' with slots=%s", intent_name, slots)
-                    resp = await ha_intent.async_handle(
-                        self.hass,
-                        platform="conversation",
-                        intent_type=intent_name,
-                        slots=slots,
-                        text_input=original_text,
-                        context=user_input.context,
-                        language=user_input.language or "de",
-                    )
-                    responses.append(resp)
+                # Execute patched intent (only for selected entities) via capability
+                exec_data = await self.use(
+                    "intent_executor",
+                    user_input,
+                    intent_name=intent_name,
+                    entity_ids=selected,
+                    language=user_input.language or "de",
+                )
+                if not exec_data or "result" not in exec_data:
+                    _LOGGER.warning("[Stage1] IntentExecutorCapability returned no result.")
+                    return {"status": "error", "result": await error_response(user_input, "Fehler beim Ausführen des Befehls.")}
 
-                # Helper to check if a response already contains plain speech
+                conv_result = exec_data["result"]
+                final_resp = conv_result.response
+
+                # If no handler produced speech, synthesize concise confirmation via capability
                 def _has_plain_speech(r) -> bool:
                     s = getattr(r, "speech", None)
                     if not s or not isinstance(s, dict):
@@ -82,12 +84,7 @@ class Stage1Processor(BaseStage):
                     plain = s.get("plain") or {}
                     return bool(plain.get("speech"))
 
-                # Prefer the last response that already has speech; else fall back to the last response
-                final_resp = next((r for r in reversed(responses) if _has_plain_speech(r)), responses[-1])
-
-                # If no handler produced speech, synthesize a concise confirmation via capability
                 if not _has_plain_speech(final_resp):
-                    # Build friendly list for confirmation (entity_id + display name)
                     friendly = []
                     for eid in selected:
                         name = pending["candidates"].get(eid)
@@ -109,11 +106,6 @@ class Stage1Processor(BaseStage):
                     if msg:
                         final_resp.async_set_speech(msg)
 
-                conv_result = conversation.ConversationResult(
-                    response=final_resp,
-                    conversation_id=user_input.conversation_id,
-                    continue_conversation=False,
-                )
                 _LOGGER.debug("[Stage1] Action disambiguation resolved and executed successfully")
                 return {"status": "handled", "result": conv_result}
 
@@ -131,25 +123,24 @@ class Stage1Processor(BaseStage):
                 _LOGGER.debug("[Stage1] Plural confirmed → executing action for all resolved entities (no disambiguation).")
 
                 intent_name = (prev_result.intent or "").strip()
-                original_text = prev_result.raw or user_input.text
                 entities = list(prev_result.resolved_ids)
 
                 try:
-                    responses = []
-                    for eid in entities:
-                        slots = {"name": {"value": eid}}
-                        _LOGGER.debug("[Stage1] Executing action intent '%s' with slots=%s", intent_name, slots)
-                        resp = await ha_intent.async_handle(
-                            self.hass,
-                            platform="conversation",
-                            intent_type=intent_name,
-                            slots=slots,
-                            text_input=original_text,
-                            context=user_input.context,
-                            language=user_input.language or "de",
-                        )
-                        responses.append(resp)
+                    exec_data = await self.use(
+                        "intent_executor",
+                        user_input,
+                        intent_name=intent_name,
+                        entity_ids=entities,
+                        language=user_input.language or "de",
+                    )
+                    if not exec_data or "result" not in exec_data:
+                        _LOGGER.warning("[Stage1] IntentExecutorCapability returned no result for plural execution.")
+                        return {"status": "error", "result": await error_response(user_input, "Fehler beim Ausführen des Befehls.")}
 
+                    conv_result = exec_data["result"]
+                    final_resp = conv_result.response
+
+                    # Speech fallback via confirmation if needed
                     def _has_plain_speech(r) -> bool:
                         s = getattr(r, "speech", None)
                         if not s or not isinstance(s, dict):
@@ -157,12 +148,7 @@ class Stage1Processor(BaseStage):
                         plain = s.get("plain") or {}
                         return bool(plain.get("speech"))
 
-                    # Prefer a response that already has speech; else last response
-                    final_resp = next((r for r in reversed(responses) if _has_plain_speech(r)), responses[-1])
-
-                    # If no handler produced speech, synthesize a concise confirmation
                     if not _has_plain_speech(final_resp):
-                        # Build friendly list for confirmation (entity_id + display name)
                         friendly = []
                         for eid in entities:
                             st = self.hass.states.get(eid)
@@ -174,7 +160,7 @@ class Stage1Processor(BaseStage):
                             user_input,
                             intent=intent_name,
                             entities=friendly,
-                            params={},  # keep generic; Stage1 doesn't invent params
+                            params={},
                             language=user_input.language or "de",
                             style="concise",
                         )
@@ -182,11 +168,6 @@ class Stage1Processor(BaseStage):
                         if msg:
                             final_resp.async_set_speech(msg)
 
-                    conv_result = conversation.ConversationResult(
-                        response=final_resp,
-                        conversation_id=user_input.conversation_id,
-                        continue_conversation=False,
-                    )
                     _LOGGER.debug("[Stage1] Multi-target execution completed without disambiguation.")
                     return {"status": "handled", "result": conv_result}
 
@@ -196,12 +177,10 @@ class Stage1Processor(BaseStage):
 
             # 2) Otherwise: NOT clearly plural → ask disambiguation like before
             _LOGGER.debug("[Stage1] Plural not confirmed → initiating disambiguation.")
-            entities_map = {}
-            for eid in prev_result.resolved_ids:
-                st = self.hass.states.get(eid)
-                name = (st and st.attributes.get("friendly_name")) or eid
-                entities_map[eid] = name
-
+            entities_map = {
+                eid: self.hass.states.get(eid).attributes.get("friendly_name", eid)
+                for eid in prev_result.resolved_ids
+            }
             data = await self.use("disambiguation", user_input, entities=entities_map)
             msg = (data or {}).get("message") or "Welches Gerät meinst du?"
 

@@ -36,10 +36,22 @@ class EntityResolverCapability(Capability):
     name = "entity_resolver"
     description = "Resolve entities from NLU slots; enrich with area + exact/fuzzy matching."
 
-    # Fuzzy thresholds (token_set_ratio)
     _FUZZ_STRONG = 92
     _FUZZ_FALLBACK = 84
     _FUZZ_MAX_ADD = 4
+
+    # ---------- NEW: unified entity registry + states ----------
+    def _all_entities(self) -> Dict[str, Any]:
+        """Collect all known entities (registry + state machine)."""
+        ent_reg = er.async_get(self.hass)
+        all_entities: Dict[str, Any] = {
+            e.entity_id: e for e in ent_reg.entities.values() if not e.disabled_by
+        }
+        for st in self.hass.states.async_all():
+            if st.entity_id not in all_entities:
+                all_entities[st.entity_id] = None
+        _LOGGER.debug("[EntityResolver] _all_entities() collected %d total entities", len(all_entities))
+        return all_entities
 
     async def run(self, user_input, *, entities: Dict[str, Any] | None = None, **_: Any) -> Dict[str, Any]:
         hass: HomeAssistant = self.hass
@@ -81,17 +93,16 @@ class EntityResolverCapability(Capability):
         if thing_name and self._looks_like_entity_id(thing_name):
             eid = thing_name.strip().lower()
             if self._state_exists(eid) and eid not in seen:
-                # respect area restriction if present
                 if not area_entities or eid in set(area_entities):
                     resolved.append(eid)
                     seen.add(eid)
                     _LOGGER.debug("[EntityResolver] Added entity_id parsed from name=%s", eid)
 
-        # 2) Exact friendly-name or object_id match (optionally filtered to area)
-        exact = self._collect_by_name_exact(hass, thing_name, domain)
+        # 2) Exact friendly-name or object_id match (merged registry + states)
+        all_entities = self._all_entities()
+        exact = self._collect_by_name_exact(hass, thing_name, domain, all_entities)
         if area_entities:
-            area_set = set(area_entities)
-            exact = [e for e in exact if e in area_set]
+            exact = [e for e in exact if e in set(area_entities)]
         for eid in exact:
             if eid not in seen:
                 resolved.append(eid)
@@ -99,8 +110,7 @@ class EntityResolverCapability(Capability):
         if exact:
             _LOGGER.debug("[EntityResolver] Exact-name/object_id matches: %s", ", ".join(exact))
 
-        # 3) Area+domain fallback when NO name was provided (user said "das Licht im Büro")
-        #    → return all domain entities in area so Stage1 can disambiguate or plural-detect.
+        # 3) Area+domain fallback when NO name was provided
         added_area = []
         if area_entities and not thing_name:
             for eid in area_entities:
@@ -116,7 +126,7 @@ class EntityResolverCapability(Capability):
         if domain and thing_name:
             fuzz_mod = await _get_fuzz()
             allowed = set(area_entities) if area_entities else None
-            fuzzy_added = self._collect_by_name_fuzzy(hass, thing_name, domain, fuzz_mod, allowed=allowed)
+            fuzzy_added = self._collect_by_name_fuzzy(hass, thing_name, domain, fuzz_mod, all_entities, allowed=allowed)
             for eid in fuzzy_added:
                 if eid not in seen:
                     resolved.append(eid)
@@ -150,7 +160,6 @@ class EntityResolverCapability(Capability):
 
     @staticmethod
     def _canon(s: Optional[str]) -> str:
-        """Lowercase, normalize umlauts, strip punctuation/extra spaces."""
         if not s:
             return ""
         t = s.lower()
@@ -181,18 +190,38 @@ class EntityResolverCapability(Capability):
         return None
 
     def _entities_in_area(self, area, domain: Optional[str]) -> List[str]:
+        """Return all entities in or textually related to an area, optionally filtered by domain.
+
+        Fallback: if an entity has no assigned area, but its friendly name or entity_id
+        contains the area name (e.g. 'hauswirtschaftsraum'), include it.
+        """
         dev_reg = dr.async_get(self.hass)
         ent_reg = er.async_get(self.hass)
         device_ids: Set[str] = {d.id for d in dev_reg.devices.values() if d.area_id == area.id}
+        canon_area = self._canon(area.name)
 
         out: List[str] = []
         for ent in ent_reg.entities.values():
+            # explicit area assignment or via device area
             in_area = (ent.area_id == area.id) or (ent.device_id in device_ids if ent.device_id else False)
+
+            # --- NEW: fuzzy textual fallback if area not assigned ---
+            if not in_area:
+                name_match = self._canon(ent.original_name or "")
+                eid_match = self._canon(ent.entity_id)
+                if canon_area and (canon_area in name_match or canon_area in eid_match):
+                    in_area = True
+
             if not in_area:
                 continue
             if domain and ent.domain != domain:
                 continue
             out.append(ent.entity_id)
+
+        _LOGGER.debug(
+            "[EntityResolver] _entities_in_area('%s') → %d entity(ies) (domain=%s)",
+            area.name, len(out), domain or "any"
+        )
         return out
 
     # ---- exact/fuzzy name matching ----
@@ -201,19 +230,23 @@ class EntityResolverCapability(Capability):
         hass: HomeAssistant,
         name: Optional[str],
         domain: Optional[str],
+        all_entities: Dict[str, Any],
     ) -> List[str]:
         if not name:
             return []
         needle = self._canon(name)
         out: List[str] = []
-        states: List[State] = hass.states.async_all(domain) if domain else hass.states.async_all()
-        for st in states:
-            friendly = st.attributes.get("friendly_name")
-            if isinstance(friendly, str) and self._canon(friendly) == needle:
-                out.append(st.entity_id)
+
+        for eid, ent in all_entities.items():
+            if domain and not eid.startswith(f"{domain}."):
                 continue
-            if self._canon(self._obj_id(st.entity_id)) == needle:
-                out.append(st.entity_id)
+            st = hass.states.get(eid)
+            friendly = st and st.attributes.get("friendly_name")
+            if isinstance(friendly, str) and self._canon(friendly) == needle:
+                out.append(eid)
+                continue
+            if self._canon(self._obj_id(eid)) == needle:
+                out.append(eid)
         return out
 
     def _collect_by_name_fuzzy(
@@ -222,6 +255,7 @@ class EntityResolverCapability(Capability):
         name: str,
         domain: str,
         fuzz_mod,
+        all_entities: Dict[str, Any],
         *,
         allowed: Optional[Set[str]] = None,
     ) -> List[str]:
@@ -231,22 +265,24 @@ class EntityResolverCapability(Capability):
             return []
 
         scored: List[Tuple[str, int, str]] = []
-        states: List[State] = hass.states.async_all(domain)
 
-        for st in states:
-            if allowed is not None and st.entity_id not in allowed:
+        for eid, ent in all_entities.items():
+            if not eid.startswith(f"{domain}."):
                 continue
-            friendly = st.attributes.get("friendly_name")
+            if allowed is not None and eid not in allowed:
+                continue
+            st = hass.states.get(eid)
+            friendly = st and st.attributes.get("friendly_name")
             cand1 = self._canon(friendly) if isinstance(friendly, str) else ""
-            cand2 = self._canon(self._obj_id(st.entity_id))
+            cand2 = self._canon(self._obj_id(eid))
 
             s1 = fuzz_mod.token_set_ratio(needle, cand1) if cand1 else 0
             s2 = fuzz_mod.token_set_ratio(needle, cand2) if cand2 else 0
-            score = s1 if s1 >= s2 else s2
+            score = max(s1, s2)
 
             if score >= self._FUZZ_STRONG or score >= self._FUZZ_FALLBACK:
-                label = friendly or st.entity_id
-                scored.append((st.entity_id, score, label))
+                label = friendly or eid
+                scored.append((eid, score, label))
 
         if not scored:
             return []
