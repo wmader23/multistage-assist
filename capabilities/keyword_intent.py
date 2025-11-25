@@ -9,27 +9,27 @@ _LOGGER = logging.getLogger(__name__)
 
 class KeywordIntentCapability(Capability):
     """
-    Detect a domain/group from German keywords and let the LLM pick
-    a specific Home Assistant intent + slots within that group.
+    Detect a domain from German keywords and let the LLM pick
+    a specific Home Assistant intent + slots within that domain.
 
-    - If no clear group is detected: return {} so Stage1 can escalate to Stage2.
-    - If exactly one group is detected: call the LLM with only that group's intents.
+    - If no clear domain is detected: return {} so Stage1 can escalate to Stage2.
+    - If exactly one domain is detected: call the LLM with only that domain's intents.
     """
 
     name = "keyword_intent"
-    description = "Derive a Home Assistant intent from a single German command using keyword groups."
+    description = "Derive a Home Assistant intent from a single German command using keyword domains."
 
-    # Group → list of keywords (singular + plural) reusing plural_detection helpers.
+    # Domain → list of keywords (singular + plural) reusing plural_detection helpers.
     # LIGHT_KEYWORDS and COVER_KEYWORDS are expected to be dicts:
     #   singular -> plural
-    GROUP_KEYWORDS: Dict[str, List[str]] = {
+    DOMAIN_KEYWORDS: Dict[str, List[str]] = {
         "light": list(LIGHT_KEYWORDS.keys()) + list(LIGHT_KEYWORDS.values()),
         "cover": list(COVER_KEYWORDS.keys()) + list(COVER_KEYWORDS.values()),
     }
 
-    # Intents per group + extra description + examples to tune the prompt.
+    # Intents per domain + extra description + examples to tune the prompt.
     # Examples are rendered into the system prompt dynamically.
-    INTENT_GROUPS: Dict[str, Dict[str, Any]] = {
+    INTENT_DOMAINS: Dict[str, Dict[str, Any]] = {
         "light": {
             "description": "Steuerung von Lichtern, Lampen und Beleuchtung.",
             "intents": {
@@ -55,7 +55,7 @@ class KeywordIntentCapability(Capability):
             },
             "examples": [
                 'User: "Fahre den Rollladen im Wohnzimmer ganz runter"\n'
-                '→ {"intent":"HassSetPosition","slots":{"area":"Wohnzimmer","position":0}}',
+                '→ {"intent":"HassSetPosition","slots":{"area":"Wohnzimmer","position":0,"domain":"cover"}}',
                 'User: "Öffne alle Jalousien im Schlafzimmer"\n'
                 '→ {"intent":"HassTurnOn","slots":{"area":"Schlafzimmer","domain":"cover"}}',
             ],
@@ -75,33 +75,83 @@ class KeywordIntentCapability(Capability):
     # Internal helpers
     # -------------------------------------------------------------------------
 
-    def _detect_group(self, text: str) -> Optional[str]:
-        """Very simple keyword-based group detection.
+    def _detect_domain(self, text: str) -> Optional[str]:
+        """Keyword-based (with fuzzy) domain detection.
 
-        If we don't get exactly ONE match, we return None to avoid ambiguity.
+        1. Try exact keyword substring matches (current behaviour).
+        2. If that yields no result, fall back to a lightweight fuzzy match
+           against single-word tokens in the utterance.
+        3. Only return a domain if we have exactly ONE unambiguous match.
         """
         t = (text or "").lower()
         matches: List[str] = []
 
-        for group, keywords in self.GROUP_KEYWORDS.items():
+        # 1) Exact substring matching
+        for domain, keywords in self.DOMAIN_KEYWORDS.items():
             if any(k in t for k in keywords):
-                matches.append(group)
+                matches.append(domain)
 
         if len(matches) == 1:
-            _LOGGER.debug("[KeywordIntent] Detected group '%s' from text=%r", matches[0], text)
+            _LOGGER.debug(
+                "[KeywordIntent] Detected domain '%s' from text=%r (exact match)",
+                matches[0],
+                text,
+            )
             return matches[0]
 
-        if not matches:
-            _LOGGER.debug("[KeywordIntent] No group keyword match for text=%r", text)
-        else:
+        if matches:
             _LOGGER.debug(
-                "[KeywordIntent] Ambiguous group match (%s) for text=%r → no group chosen.",
+                "[KeywordIntent] Ambiguous exact domain match (%s) for text=%r → no domain chosen.",
                 ", ".join(matches),
                 text,
             )
+            return None
+
+        # 2) Fuzzy matching fallback (for typos etc.)
+        import difflib
+        import re
+
+        tokens = re.findall(r"\w+", t)
+        fuzzy_scores: Dict[str, float] = {}
+
+        for domain, keywords in self.DOMAIN_KEYWORDS.items():
+            best_score = 0.0
+            for kw in keywords:
+                kw_l = kw.lower()
+                for tok in tokens:
+                    score = difflib.SequenceMatcher(None, kw_l, tok).ratio()
+                    if score > best_score:
+                        best_score = score
+            # Only consider reasonably strong matches
+            if best_score >= 0.8:
+                fuzzy_scores[domain] = best_score
+
+        if len(fuzzy_scores) == 1:
+            domain = next(iter(fuzzy_scores.keys()))
+            score = fuzzy_scores[domain]
+            _LOGGER.debug(
+                "[KeywordIntent] Detected domain '%s' from text=%r via fuzzy match (score=%.2f)",
+                domain,
+                text,
+                score,
+            )
+            return domain
+
+        if not fuzzy_scores:
+            _LOGGER.debug(
+                "[KeywordIntent] No domain keyword match (exact or fuzzy) for text=%r",
+                text,
+            )
+        else:
+            _LOGGER.debug(
+                "[KeywordIntent] Ambiguous fuzzy domain match (%s) for text=%r → no domain chosen.",
+                ", ".join(fuzzy_scores.keys()),
+                text,
+            )
+
         return None
 
-    def _build_system_prompt(self, group: str, meta: Dict[str, Any]) -> str:
+    def _build_system_prompt(self, domain: str, meta: Dict[str, Any]) -> str:
         """Dynamically build the system prompt from Python metadata."""
         desc = meta.get("description") or ""
         intents: Dict[str, str] = meta.get("intents") or {}
@@ -117,14 +167,14 @@ class KeywordIntentCapability(Capability):
             "2. Choose EXACTLY ONE intent from the allowed list.",
             "3. Fill reasonable slots for Home Assistant (area, name, domain, etc.).",
             "",
-            f"Current group: {group}",
+            f"Current domain: {domain}",
         ]
 
         if desc:
-            lines.append(f"Group description: {desc}")
+            lines.append(f"Domain description: {desc}")
 
         lines.append("")
-        lines.append("Allowed intents in this group:")
+        lines.append("Allowed intents in this domain:")
         for iname, idesc in intents.items():
             lines.append(f"- {iname}: {idesc}")
 
@@ -157,26 +207,26 @@ class KeywordIntentCapability(Capability):
     # -------------------------------------------------------------------------
 
     async def run(self, user_input, **_: Any) -> Dict[str, Any]:
-        """Main entry: detect group, then ask LLM for intent+slots within that group."""
+        """Main entry: detect domain, then ask LLM for intent+slots within that domain."""
         text = user_input.text or ""
-        group = self._detect_group(text)
+        domain = self._detect_domain(text)
 
-        # No clear group → let Stage1 escalate to Stage2 or other mechanisms.
-        if not group:
+        # No clear domain → let Stage1 escalate to Stage2 or other mechanisms.
+        if not domain:
             return {}
 
-        meta = self.INTENT_GROUPS.get(group)
+        meta = self.INTENT_DOMAINS.get(domain)
         if not meta:
-            _LOGGER.warning("[KeywordIntent] No INTENT_GROUPS metadata for group=%r", group)
+            _LOGGER.warning("[KeywordIntent] No INTENT_DOMAINS metadata for domain=%r", domain)
             return {}
 
-        system = self._build_system_prompt(group, meta)
+        system = self._build_system_prompt(domain, meta)
         prompt = {
             "system": system,
             "schema": self.SCHEMA,
         }
 
-        _LOGGER.debug("[KeywordIntent] Deriving intent for text=%r with group=%s", text, group)
+        _LOGGER.debug("[KeywordIntent] Deriving intent for text=%r with domain=%s", text, domain)
         data = await self._safe_prompt(prompt, {"user_input": text})
 
         if not isinstance(data, dict):
@@ -203,7 +253,7 @@ class KeywordIntentCapability(Capability):
             return {}
 
         result = {
-            "group": group,
+            "domain": domain,
             "intent": intent,
             "slots": slots,
         }

@@ -6,7 +6,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
-from homeassistant.helpers import entity_exposure
+from homeassistant.components.homeassistant.exposed_entities import async_should_expose
+from homeassistant.components.conversation import DOMAIN as CONVERSATION_DOMAIN
 
 from .base import Capability
 
@@ -135,26 +136,14 @@ class EntityResolverCapability(Capability):
             if fuzzy_added:
                 _LOGGER.debug("[EntityResolver] Fuzzy enriched with: %s", ", ".join(fuzzy_added))
 
-        # ---------- NEW: filter to exposed entities right before returning ----------
-        try:
-            expo = entity_exposure.get_exposed_entities(hass)
-            # handle either a set-like or dict-like return without importing its internals
-            if isinstance(expo, dict):
-                exposed_ids: Optional[Set[str]] = set(expo.keys())
-            else:
-                exposed_ids = set(expo) if expo is not None else None
-        except Exception as err:
-            _LOGGER.warning("Entity exposure lookup failed (%s); returning unfiltered", err)
-            exposed_ids = None
-
-        if exposed_ids is not None:
-            pre_count = len(resolved)
-            resolved = [eid for eid in resolved if eid in exposed_ids]
-            _LOGGER.debug(
-                "[EntityResolver] Exposure filter kept %d/%d entities",
-                len(resolved), pre_count
-            )
-        # ---------------------------------------------------------------------------
+        # 5) Filter to exposed entities
+        pre_count = len(resolved)
+        # Use the same helper the default conversation agent uses.
+        resolved = [eid for eid in resolved if async_should_expose(hass, CONVERSATION_DOMAIN, eid)]
+        _LOGGER.debug(
+            "[EntityResolver] Exposure filter kept %d/%d entities",
+            len(resolved), pre_count
+        )
 
         _LOGGER.debug(
             "[EntityResolver] Result → %d entities (area_add=%d, exact=%d, fuzzy=%d): %s",
@@ -219,16 +208,25 @@ class EntityResolverCapability(Capability):
         """
         dev_reg = dr.async_get(self.hass)
         ent_reg = er.async_get(self.hass)
-        device_ids: Set[str] = {d.id for d in dev_reg.devices.values() if d.area_id == area.id}
         canon_area = self._canon(area.name)
 
         out: List[str] = []
+
         for ent in ent_reg.entities.values():
             # explicit area assignment or via device area
-            in_area = (ent.area_id == area.id) or (ent.device_id in device_ids if ent.device_id else False)
+            dev = dev_reg.devices.get(ent.device_id) if ent.device_id else None
 
-            # --- NEW: fuzzy textual fallback if area not assigned ---
-            if not in_area:
+            # is entity assigned to area directly or via device?
+            has_any_area = bool(ent.area_id or (dev and dev.area_id))
+
+            # is entity explicitly assigned to the area of interest?
+            in_area = (
+                ent.area_id == area.id
+                or (dev is not None and dev.area_id == area.id)
+            )
+
+            # Text-fallback only if entity is not assigned to any area
+            if not in_area and not has_any_area:
                 name_match = self._canon(ent.original_name or "")
                 eid_match = self._canon(ent.entity_id)
                 if canon_area and (canon_area in name_match or canon_area in eid_match):
@@ -245,6 +243,7 @@ class EntityResolverCapability(Capability):
             area.name, len(out), domain or "any"
         )
         return out
+
 
     # ---- exact/fuzzy name matching ----
     def _collect_by_name_exact(

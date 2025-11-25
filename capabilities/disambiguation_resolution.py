@@ -38,14 +38,6 @@ Map `user_input` to one or more `entity_id`s from `input_entities` and produce a
 - If multiple: list friendly names comma-separated, short and natural.
 - If `entities` is empty due to "keine"/"nichts": acknowledge doing nothing.
 
-## Output format (STRICT)
-Return ONLY a minified JSON object with exactly these keys in this order:
-{"entities":[<strings>],"message":"<string>"}
-
-- No markdown, no backticks, no extra text.
-- Never return a bare array like ["light.kueche_spots"] — that is invalid.
-- On failure/uncertainty, return `{}` exactly.
-
 ## Examples
 Input:
 {

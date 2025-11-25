@@ -11,6 +11,7 @@ from .capabilities.intent_confirmation import IntentConfirmationCapability
 from .capabilities.intent_executor import IntentExecutorCapability
 from .capabilities.entity_resolver import EntityResolverCapability
 from .capabilities.keyword_intent import KeywordIntentCapability
+from .capabilities.area_alias import AreaAliasCapability
 from .conversation_utils import make_response, error_response, with_new_text
 from .stage_result import Stage0Result
 
@@ -30,6 +31,7 @@ class Stage1Processor(BaseStage):
         IntentExecutorCapability,
         EntityResolverCapability,
         KeywordIntentCapability,
+        AreaAliasCapability
     ]
 
     def __init__(self, hass, config):

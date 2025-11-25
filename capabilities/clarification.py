@@ -9,7 +9,7 @@ class ClarificationCapability(Capability):
     """Split or rephrase unclear commands."""
 
     name = "clarification"
-    description = "Turn vague or compound commands into atomic smart-home actions."
+    description = "Turn compound commands into atomic smart-home actions."
 
     PROMPT = {
     "system": """
@@ -19,7 +19,7 @@ You are a language model that obtains intents from a German user commands for sm
 - user_input: A German natural language command.
 
 ## Rules
-1. Split the input into a list of precise **atomic commands** in German.
+1. Split the input into a list of precise **atomic commands** in German only if the target is different.
 2. Each command must describe exactly one action.
 3. Use natural German phrasing such as:
     - "Schalte ... an"
@@ -36,6 +36,8 @@ You are a language model that obtains intents from a German user commands for sm
 ## Example
 Input: "Mach das Licht im Wohnzimmer an und die Jalousien runter"
 Output: ["Schalte das Licht im Wohnzimmer an", "Fahre die Jalousien im Wohnzimmer runter"]
+Input: "Öffne den Rolladen im Büro zu 5%"
+Output: ["Öffne den Rolladen im Büro zu 5%"]
 """,
         "schema": {
             "type": "array",

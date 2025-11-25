@@ -23,7 +23,7 @@ class MultiStageAssistAgent(conversation.AbstractConversationAgent):
             Stage2Processor(hass, config),
         ]
         # 🔧 Give every stage a back-reference to the orchestrator
-        for stage in self._stages:
+        for stage in self.stages:
             stage.agent = self
 
     @property

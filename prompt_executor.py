@@ -191,6 +191,7 @@ class PromptExecutor:
             return True
 
         return bool(result)
+        #TODO validate nested elements
 
     async def _execute(
         self,
