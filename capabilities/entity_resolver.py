@@ -193,6 +193,11 @@ class EntityResolverCapability(Capability):
 
     def _match_device_class_or_unit(self, entity_id: str, target_class: str) -> bool:
         """Check if entity matches target device_class OR appropriate unit."""
+        # 0. Safety: If target class matches the domain (e.g. 'light'), allow it.
+        # This fixes issues where LLMs hallucinate domain as device_class.
+        if target_class == entity_id.split(".", 1)[0]:
+            return True
+
         state = self.hass.states.get(entity_id)
         if not state:
             return False

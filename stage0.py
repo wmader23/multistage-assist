@@ -19,16 +19,22 @@ class Stage0Processor(BaseStage):
     """Stage 0: Dry-run NLU and early entity resolution (no LLM)."""
     name = "stage0"
 
+    # Mapping specific HA intents to implied domains/device_classes
+    INTENT_IMPLICATIONS = {
+        "HassClimateGetTemperature": {"device_class": "temperature"},
+        "HassTurnOn": {}, 
+        "HassTurnOff": {}, 
+        "HassLightSet": {"domain": "light"},
+    }
+
     async def _dry_run_recognize(self, user_input: conversation.ConversationInput):
         agent = conversation.async_get_agent(self.hass)
         if not isinstance(agent, DefaultAgent):
-            _LOGGER.debug("[Stage0] DefaultAgent not available → skipping dry-run recognize.")
             return None
 
         language = user_input.language or "de"
         lang_intents = await agent.async_get_or_load_intents(language)
         if not lang_intents:
-            _LOGGER.debug("[Stage0] No language intents loaded for '%s'.", language)
             return None
 
         slot_lists = await agent._make_slot_lists()
@@ -71,12 +77,17 @@ class Stage0Processor(BaseStage):
         _LOGGER.debug("[Stage0] NLU matched intent='%s'", intent_name)
 
         norm_entities = self._normalize_entities(getattr(match, "entities", None))
+        
+        # Inject implied constraints based on intent
+        implications = self.INTENT_IMPLICATIONS.get(intent_name, {})
+        if implications:
+            _LOGGER.debug("[Stage0] Injecting implied constraints for %s: %s", intent_name, implications)
+            norm_entities.update(implications)
+
         if norm_entities:
             _LOGGER.debug("[Stage0] NLU extracted entities (raw) keys=%s", list(norm_entities.keys()))
-        else:
-            _LOGGER.debug("[Stage0] NLU extracted no entities")
 
-        # Resolve entities (map friendly/area/slots to concrete entity_ids)
+        # Resolve entities
         resolver = EntityResolverCapability(self.hass, self.config)
         resolved = await resolver.run(user_input, entities=norm_entities)
         resolved_ids = (resolved or {}).get("resolved_ids", [])
@@ -90,7 +101,6 @@ class Stage0Processor(BaseStage):
             resolved_ids=resolved_ids,
         )
 
-        # Too many candidates? Ask next stage to clarify.
         threshold = int(getattr(self.config, "early_filter_threshold", 10))
         if resolved_ids and len(resolved_ids) > threshold:
             _LOGGER.debug(
@@ -106,12 +116,11 @@ class Stage0Processor(BaseStage):
             )
             return {"status": "escalate", "result": result}
 
-        # If nothing concrete yet → escalate
         if not resolved_ids:
             _LOGGER.debug("[Stage0] No concrete targets resolved → escalate.")
             return {"status": "escalate", "result": result}
 
-        # Single, registered intent → execute directly via capability
+        # Direct Execution Path (Single Entity Match)
         if len(resolved_ids) == 1 and intent_name:
             try:
                 _LOGGER.debug(
@@ -119,11 +128,17 @@ class Stage0Processor(BaseStage):
                     intent_name,
                     resolved_ids[0],
                 )
+                
+                # FIX: Filter params to exclude resolution-only keys, pass the rest (brightness, color, etc.)
+                resolution_keys = {"area", "room", "floor", "name", "entity", "device", "label", "domain", "device_class", "entity_id"}
+                execution_params = {k: v for k, v in norm_entities.items() if k not in resolution_keys}
+                
                 executor = IntentExecutorCapability(self.hass, self.config)
                 exec_data = await executor.run(
                     user_input,
                     intent_name=intent_name,
                     entity_ids=resolved_ids,
+                    params=execution_params, # <--- PASS THE BRIGHTNESS/COLOR/ETC
                     language=user_input.language or "de",
                 )
 
@@ -141,7 +156,6 @@ class Stage0Processor(BaseStage):
                     "result": await error_response(user_input, f"Interner Fehler beim Ausführen: {err}"),
                 }
 
-        # Multiple candidates → escalate for disambiguation
         _LOGGER.debug(
             "[Stage0] %d candidate(s) and intent='%s' → escalate to Stage1 for disambiguation.",
             len(resolved_ids),

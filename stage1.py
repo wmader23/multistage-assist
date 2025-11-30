@@ -134,6 +134,25 @@ class Stage1Processor(BaseStage):
         """Unified logic for handling multiple candidates (filter -> plural -> disambiguate)."""
         key = getattr(user_input, "session_id", None) or user_input.conversation_id
         
+        # Optimization: If we have exactly 1 candidate, skip straight to execution!
+        if len(candidates) == 1:
+            _LOGGER.debug("[Stage1] Single candidate '%s' identified. Skipping plural/disambiguation.", candidates[0])
+            try:
+                exec_data = await self.use(
+                    "intent_executor",
+                    user_input,
+                    intent_name=intent_name,
+                    entity_ids=candidates,
+                    params=params,
+                    language=user_input.language or "de",
+                )
+                if not exec_data or "result" not in exec_data:
+                    return {"status": "error", "result": await error_response(user_input, "Fehler.")}
+                return {"status": "handled", "result": exec_data["result"]}
+            except Exception as e:
+                _LOGGER.exception("[Stage1] execution failed: %s", e)
+                return {"status": "error", "result": await error_response(user_input, "Fehler.")}
+
         # 1) Plural detection
         pd = await self.use("plural_detection", user_input) or {}
         if pd.get("multiple_entities") is True:
@@ -255,7 +274,6 @@ class Stage1Processor(BaseStage):
 
             # --- Refinement Check: Attempt to narrow domain via KeywordIntent ---
             # If Stage0 result is broad (multiple items), cross-check with KeywordIntent 
-            # to see if a strict domain (e.g. 'sensor') was intended but missed by Stage0.
             ki_data = await self.use("keyword_intent", user_input) or {}
             strict_domain = ki_data.get("domain")
             strict_intent = ki_data.get("intent")
@@ -263,24 +281,20 @@ class Stage1Processor(BaseStage):
             if strict_domain and strict_intent:
                  _LOGGER.debug("[Stage1] KeywordIntent detected stricter domain='%s', intent='%s'.", strict_domain, strict_intent)
                  
-                 # Re-resolve using the strict slots from KeywordIntent (which include 'domain')
+                 # Re-resolve using the strict slots from KeywordIntent
                  slots = ki_data.get("slots") or {}
                  er_data = await self.use("entity_resolver", user_input, entities=slots) or {}
                  refined_ids = er_data.get("resolved_ids") or []
                  
-                 # If we found something valid with the stricter domain, prefer it!
-                 # This fixes "Temperature in Office" returning lights/covers (Stage0) vs just sensors (KeywordIntent).
                  if refined_ids:
                      _LOGGER.debug("[Stage1] Refined resolution found %d entities. Replacing Stage0 result.", len(refined_ids))
                      candidates = refined_ids
                      intent_name = strict_intent
-                     # We can also adopt the slots as params if needed, but currently _process_candidates 
-                     # mostly relies on IDs. If specific params (like temp=22) are needed, we should extract them.
-                     # For HassGetState/TurnOn/Off, IDs are usually enough.
                  else:
                      _LOGGER.debug("[Stage1] Refined resolution yielded no entities. Falling back to Stage0 candidates.")
             
             # Proceed with whatever candidates we have (original or refined)
+            # NOTE: If we refined down to 1 candidate, _process_candidates will now efficiently skip plural/disambig steps.
             return await self._process_candidates(user_input, candidates, intent_name)
 
         # --- Clarification: split into atomic commands -------------------------
