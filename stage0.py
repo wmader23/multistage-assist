@@ -129,7 +129,7 @@ class Stage0Processor(BaseStage):
                     resolved_ids[0],
                 )
                 
-                # FIX: Filter params to exclude resolution-only keys, pass the rest (brightness, color, etc.)
+                # Filter params to exclude resolution-only keys
                 resolution_keys = {"area", "room", "floor", "name", "entity", "device", "label", "domain", "device_class", "entity_id"}
                 execution_params = {k: v for k, v in norm_entities.items() if k not in resolution_keys}
                 
@@ -138,7 +138,7 @@ class Stage0Processor(BaseStage):
                     user_input,
                     intent_name=intent_name,
                     entity_ids=resolved_ids,
-                    params=execution_params, # <--- PASS THE BRIGHTNESS/COLOR/ETC
+                    params=execution_params, 
                     language=user_input.language or "de",
                 )
 

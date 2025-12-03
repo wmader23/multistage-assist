@@ -7,9 +7,6 @@ from .const import (
     CONF_STAGE1_IP,
     CONF_STAGE1_PORT,
     CONF_STAGE1_MODEL,
-    CONF_STAGE2_IP,
-    CONF_STAGE2_PORT,
-    CONF_STAGE2_MODEL,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -17,17 +14,14 @@ _LOGGER = logging.getLogger(__name__)
 
 class Stage(enum.Enum):
     STAGE1 = 1
-    STAGE2 = 2
 
 
-DEFAULT_ESCALATION_PATH: list[Stage] = [Stage.STAGE1, Stage.STAGE2]
-
+DEFAULT_ESCALATION_PATH: list[Stage] = [Stage.STAGE1]
 
 def _get_stage_config(config: dict, stage: Stage) -> tuple[str, int, str]:
     if stage == Stage.STAGE1:
         return (config[CONF_STAGE1_IP], config[CONF_STAGE1_PORT], config[CONF_STAGE1_MODEL])
-    if stage == Stage.STAGE2:
-        return (config[CONF_STAGE2_IP], config[CONF_STAGE2_PORT], config[CONF_STAGE2_MODEL])
+    # Stage 2 logic is now handled by GoogleGeminiClient, not here.
     raise ValueError(f"Unknown stage: {stage}")
 
 
@@ -112,7 +106,7 @@ class PromptExecutor:
         example_pairs = []
         for k, spec in props.items():
             t = spec.get("type", "string")
-            example_pairs.append(f'"{k}":{_slot(t, spec)}')  # <-- fixed
+            example_pairs.append(f'"{k}":{_slot(t, spec)}')
 
         example_obj = "{" + ",".join(example_pairs) + "}"
 
@@ -144,7 +138,7 @@ class PromptExecutor:
                 return isinstance(val, list)
             if t == "null":
                 return val is None
-            return True  # unknown → assume ok
+            return True
 
         stype = schema.get("type")
 
@@ -182,16 +176,13 @@ class PromptExecutor:
                         if not all(_is_type(x, item_t) for x in val):
                             return False
                 else:
-                    # permit null if expected is a union implied by docs (string|null)
                     if val is None and expected != "null":
-                        # allow None only if "null" explicitly allowed via list (handled above)
                         return False
                     if val is not None and not _is_type(val, expected or "string"):
                         return False
             return True
 
         return bool(result)
-        #TODO validate nested elements
 
     async def _execute(
         self,

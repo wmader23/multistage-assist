@@ -1,7 +1,9 @@
 import logging
+import asyncio
 from typing import Any, Dict, List
 
 from homeassistant.components import conversation
+from custom_components.multistage_assist.const import CONF_GOOGLE_API_KEY, CONF_STAGE2_MODEL
 from .base import Capability
 
 _LOGGER = logging.getLogger(__name__)
@@ -9,53 +11,60 @@ _LOGGER = logging.getLogger(__name__)
 
 class ChatCapability(Capability):
     """
-    Handle general conversation/chit-chat when no specific smart home intent is found.
+    Handle general conversation using Google Gemini (via google-genai SDK).
+    Initializes the client lazily to avoid blocking I/O in the event loop.
     """
 
     name = "chat"
-    description = "General conversation handler using LLM."
+    description = "General conversation handler using Google Gemini."
 
-    PROMPT = {
-        "system": """
-You are a helpful, witty smart home assistant named "Jarvis".
-You are chatting with the user in German.
-Keep your answers concise (1-2 sentences) and helpful.
-Do not hallucinate smart home devices or states you don't know about.
-If the user asks something you can't do, politely explain.
-""",
-        # No strict schema, we want free text.
-        # But our PromptExecutor expects a schema usually?
-        # If we want free text, we might need to bypass the strict JSON enforcement in PromptExecutor
-        # or just ask for a simple JSON wrapper.
-        "schema": {
-            "properties": {
-                "response": {"type": "string"}
-            },
-            "required": ["response"]
-        }
-    }
+    def __init__(self, hass, config):
+        super().__init__(hass, config)
+        self.api_key = config.get(CONF_GOOGLE_API_KEY)
+        self.model_name = config.get(CONF_STAGE2_MODEL, "gemini-1.5-flash")
+        
+        self._client_wrapper = None
+        self._init_lock = asyncio.Lock()
 
-    async def run(self, user_input, **_: Any) -> conversation.ConversationResult:
-        text = user_input.text
-        
-        # TODO: Retrieve history using user_input.conversation_id if available/stored
-        # limit to last 500 words as requested
-        
-        payload = {
-            "user_input": text
-        }
+    async def _get_client(self):
+        """
+        Initialize the GoogleGeminiClient in an executor to avoid blocking the loop
+        during SSL certificate loading AND module imports.
+        """
+        async with self._init_lock:
+            if self._client_wrapper:
+                return self._client_wrapper
+            
+            if not self.api_key:
+                return None
 
-        _LOGGER.debug("[Chat] Generating chat response for: %s", text)
-        
-        # We use the existing safe_prompt which enforces JSON.
-        # This adds a slight overhead but keeps the architecture consistent.
-        data = await self._safe_prompt(self.PROMPT, payload)
-        
-        response_text = "Ich bin mir nicht sicher, was du meinst."
-        if isinstance(data, dict):
-            response_text = data.get("response", response_text)
+            # Define the blocking creation function
+            def _create_client():
+                # Perform the heavy import inside the thread, not at module level
+                # This prevents the 'import google.genai' from blocking the main loop
+                from .google_gemini_client import GoogleGeminiClient
+                return GoogleGeminiClient(api_key=self.api_key, model=self.model_name)
 
-        # Return a conversation result
+            try:
+                _LOGGER.debug("[Chat] Initializing Gemini Client (and importing SDK) in background thread...")
+                self._client_wrapper = await self.hass.async_add_executor_job(_create_client)
+                _LOGGER.debug("[Chat] Gemini Client initialized successfully.")
+            except Exception as e:
+                _LOGGER.error("Failed to initialize Google GenAI client: %s", e)
+                
+            return self._client_wrapper
+
+    async def run(self, user_input, history: List[Dict[str, str]] = None, **_: Any) -> conversation.ConversationResult:
+        # Get the client (initializing it if necessary)
+        client = await self._get_client()
+
+        if not client:
+            _LOGGER.error("[Chat] No Google API key configured or client initialization failed.")
+            response_text = "Ich bin nicht für Chat konfiguriert (Client Fehler)."
+        else:
+            _LOGGER.debug("[Chat] Sending to Gemini (model=%s) with %d history items.", client.model, len(history) if history else 0)
+            response_text = await client.chat(user_input.text, history)
+
         intent_response = conversation.intent.IntentResponse(language=user_input.language or "de")
         intent_response.async_set_speech(response_text)
         

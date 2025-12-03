@@ -14,7 +14,6 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up from YAML (not supported)."""
-    _LOGGER.warning("YAML setup is not supported for %s", DOMAIN)
     return True
 
 
@@ -26,9 +25,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     from .conversation import MultiStageAssistAgent
     from homeassistant.components import conversation
 
-    agent = MultiStageAssistAgent(hass, entry.data)
+    # MERGE CONFIG: prefer options (reconfiguration) over data (initial setup)
+    # This ensures changes made via "Configure" actually take effect.
+    effective_config = {**entry.data, **entry.options}
+
+    agent = MultiStageAssistAgent(hass, effective_config)
     conversation.async_set_agent(hass, entry, agent)
-    _LOGGER.info("Multi-Stage Assist agent registered with config: %s", entry.data)
+    
+    # REGISTER UPDATE LISTENER: This makes reconfiguration work!
+    # When options are updated, this listener triggers a reload of the integration.
+    entry.async_on_unload(entry.add_update_listener(update_listener))
+    
+    _LOGGER.info("Multi-Stage Assist agent registered")
     return True
 
 
@@ -38,5 +46,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     conversation.async_unset_agent(hass, entry)
     hass.data[DOMAIN].pop(entry.entry_id, None)
-    _LOGGER.info("Multi-Stage Assist agent unregistered")
     return True
+
+
+async def update_listener(hass: HomeAssistant, entry: ConfigEntry):
+    """Handle options update."""
+    # Reload the integration so the new config is applied immediately
+    await hass.config_entries.async_reload(entry.entry_id)
