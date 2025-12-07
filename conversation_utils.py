@@ -1,9 +1,13 @@
 import logging
+import re
+from typing import List, Dict, Any, Optional
+
+from homeassistant.core import HomeAssistant
 from homeassistant.components import conversation
 from homeassistant.helpers import intent
-from typing import List, Dict, Any
 
 _LOGGER = logging.getLogger(__name__)
+
 
 async def make_response(message: str, user_input: conversation.ConversationInput, end: bool = False):
     """Create a conversation response with a spoken message."""
@@ -16,16 +20,17 @@ async def make_response(message: str, user_input: conversation.ConversationInput
         continue_conversation=not end,
     )
 
+
 async def error_response(user_input: conversation.ConversationInput, msg: str = None):
+    """Return a standardized error response."""
     message = msg or "Entschuldigung, ich habe das nicht verstanden."
+    _LOGGER.debug("Error response for input=%s → %s", user_input.text, message)
     return await make_response(message, user_input)
+
 
 def with_new_text(user_input: conversation.ConversationInput, new_text: str) -> conversation.ConversationInput:
     """Clone a ConversationInput with modified text but same metadata."""
-    # Depending on HA version, satellite_id might be required positional arg
-    # We fetch it safely, defaulting to None if missing on the input object
     satellite_id = getattr(user_input, "satellite_id", None)
-    
     return conversation.ConversationInput(
         text=new_text,
         context=user_input.context,
@@ -33,10 +38,12 @@ def with_new_text(user_input: conversation.ConversationInput, new_text: str) -> 
         device_id=user_input.device_id,
         language=user_input.language,
         agent_id=getattr(user_input, "agent_id", None),
-        satellite_id=satellite_id, # Pass explicitly
+        satellite_id=satellite_id,
     )
 
+
 # --- SHARED KEYWORDS ---
+
 LIGHT_KEYWORDS: Dict[str, str] = {
     "licht": "lichter",
     "lampe": "lampen",
@@ -51,6 +58,28 @@ COVER_KEYWORDS: Dict[str, str] = {
     "jalousie": "jalousien",
     "markise": "markisen",
     "beschattung": "beschattungen",
+}
+
+SWITCH_KEYWORDS: Dict[str, str] = {
+    "steckdose": "steckdosen",
+    "schalter": "schalter",
+    "zwischenstecker": "zwischenstecker",
+    "strom": "strom",
+}
+
+FAN_KEYWORDS: Dict[str, str] = {
+    "ventilator": "ventilatoren",
+    "luefter": "luefter",
+    "lüfter": "lüfter",
+}
+
+MEDIA_KEYWORDS: Dict[str, str] = {
+    "tv": "tvs",
+    "fernseher": "fernseher",
+    "musik": "musik",
+    "radio": "radios",
+    "lautsprecher": "lautsprecher",
+    "player": "player",
 }
 
 SENSOR_KEYWORDS: Dict[str, str] = {
@@ -72,14 +101,15 @@ OTHER_ENTITY_PLURALS: Dict[str, str] = {
     "das fenster": "die fenster",
     "tür": "türen",
     "tor": "tore",
-    "steckdose": "steckdosen",
-    "ventilator": "ventilatoren",
     "gerät": "geräte",
 }
 
 _ENTITY_PLURALS: Dict[str, str] = {
     **LIGHT_KEYWORDS,
     **COVER_KEYWORDS,
+    **SWITCH_KEYWORDS,
+    **FAN_KEYWORDS,
+    **MEDIA_KEYWORDS,
     **SENSOR_KEYWORDS,
     **CLIMATE_KEYWORDS,
     **OTHER_ENTITY_PLURALS,
@@ -88,43 +118,90 @@ _ENTITY_PLURALS: Dict[str, str] = {
 # --- HELPER FUNCTIONS ---
 
 def join_names(names: List[str]) -> str:
-    if not names: return ""
-    if len(names) == 1: return names[0]
+    """Join a list of names with commas and 'und'."""
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
     return f"{', '.join(names[:-1])} und {names[-1]}"
 
+
 def normalize_speech_for_tts(text: str) -> str:
-    if not text: return ""
-    import re
+    """Normalize text for German TTS."""
+    if not text:
+        return ""
+    
+    # 1. Replace decimal dots with commas
     text = re.sub(r"(\d+)\.(\d+)", r"\1,\2", text)
-    replacements = {"°C": " Grad Celsius", "%": " Prozent", "kWh": " Kilowattstunden", "lx": " Lux"}
+    
+    # 2. Expand common units
+    replacements = {
+        "°C": " Grad Celsius",
+        "°": " Grad",
+        "%": " Prozent",
+        "kWh": " Kilowattstunden",
+        "kW": " Kilowatt",
+        "W": " Watt",
+        "V": " Volt",
+        "A": " Ampere",
+        "lx": " Lux",
+        "lm": " Lumen",
+    }
+    
     for symbol, spoken in replacements.items():
         text = re.sub(rf"{re.escape(symbol)}(?=$|\s|[.,!?])", spoken, text)
+        
     return text.strip()
 
+
 def format_chat_history(history: List[Dict[str, str]], max_words: int = 500) -> str:
+    """Format chat history into a text block."""
     full_text = []
     word_count = 0
+    
     for turn in reversed(history):
         role = "User" if turn["role"] == "user" else "Jarvis"
         content = turn["content"]
+        
         count = len(content.split())
-        if word_count + count > max_words: break
+        if word_count + count > max_words:
+            break
+        
         full_text.insert(0, f"{role}: {content}")
         word_count += count
+        
     return "\n".join(full_text)
 
-def filter_candidates_by_state(hass, entity_ids: List[str], intent_name: str) -> List[str]:
-    if intent_name not in ("HassTurnOn", "HassTurnOff"): return entity_ids
+
+def filter_candidates_by_state(hass: HomeAssistant, entity_ids: List[str], intent_name: str) -> List[str]:
+    """Filter out entities that are already in the desired state."""
+    if intent_name not in ("HassTurnOn", "HassTurnOff"):
+        return entity_ids
+
     filtered = []
     for eid in entity_ids:
-        st = hass.states.get(eid)
-        if not st or st.state in ("unavailable", "unknown"): continue
-        state = st.state
+        state_obj = hass.states.get(eid)
+        if not state_obj or state_obj.state in ("unavailable", "unknown"):
+            continue
+
+        state = state_obj.state
         domain = eid.split(".", 1)[0]
+        
         keep = False
         if intent_name == "HassTurnOff":
-            keep = (state != "closed") if domain == "cover" else (state != "off")
+            if domain == "cover":
+                keep = (state != "closed")
+            else:
+                # Works for light, switch, fan, media_player, etc. (off)
+                keep = (state != "off")
         elif intent_name == "HassTurnOn":
-            keep = (state != "open") if domain == "cover" else (state != "on")
-        if keep: filtered.append(eid)
+            if domain == "cover":
+                keep = (state != "open")
+            else:
+                # Works for light, switch, fan, etc. (on/playing/etc? - usually 'on' check is enough)
+                keep = (state != "on")
+        
+        if keep:
+            filtered.append(eid)
+    
     return filtered

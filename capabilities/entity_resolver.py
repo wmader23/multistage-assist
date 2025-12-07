@@ -34,7 +34,6 @@ DEVICE_CLASS_UNITS = {
     "pressure": {"hPa", "mbar", "bar", "psi"},
 }
 
-# List of generic terms to ignore if found in 'name' slot
 GENERIC_NAMES = {"licht", "lichter", "lampe", "lampen", "leuchte", "leuchten", "gerät", "geräte", "ding", "alles", "alle", "etwas"}
 
 _fuzz = None
@@ -78,16 +77,9 @@ class EntityResolverCapability(Capability):
         area_hint = self._first_str(slots, "area", "room")
         floor_hint = self._first_str(slots, "floor", "level")
 
-        # --- FIX: Ignore generic names ---
         if thing_name and thing_name.lower().strip() in GENERIC_NAMES:
-            _LOGGER.debug("[EntityResolver] Ignoring generic name '%s'. Treating as empty name.", thing_name)
+            _LOGGER.debug("[EntityResolver] Ignoring generic name '%s'.", thing_name)
             thing_name = None
-        # ---------------------------------
-
-        _LOGGER.debug(
-            "[EntityResolver] Incoming slots: domain=%r, name=%r, area=%r, floor=%r",
-            domain, thing_name, area_hint, floor_hint,
-        )
 
         resolved: List[str] = []
         seen: Set[str] = set()
@@ -103,7 +95,6 @@ class EntityResolverCapability(Capability):
         area_entities: List[str] = []
         if area_obj:
             area_entities = self._entities_in_area(area_obj, domain)
-            # If no specific name, get all domain entities in area
             if not thing_name:
                 for eid in area_entities:
                     if eid not in seen:
@@ -141,7 +132,6 @@ class EntityResolverCapability(Capability):
 
         # Filter by Floor
         if floor_obj:
-            _LOGGER.debug("[EntityResolver] Filtering %d candidates by floor '%s'", len(resolved), floor_obj.name)
             resolved = [eid for eid in resolved if self._is_entity_on_floor(eid, floor_obj.floor_id)]
 
         # Filter by Device Class
@@ -155,7 +145,23 @@ class EntityResolverCapability(Capability):
         _LOGGER.debug("[EntityResolver] Final Result: %d entities (pre-filter: %d)", len(resolved), pre_count)
         return {"resolved_ids": resolved}
 
-    # ----------- Helpers (Identical to previous versions) -----------
+    # --- NEW HELPER ---
+    def _entities_in_area_by_name(self, area_name: str, domain: str = None) -> List[Dict[str, str]]:
+        """Return list of {id, friendly_name} for all entities in an area."""
+        area = self._find_area(area_name)
+        if not area:
+            return []
+        
+        eids = self._entities_in_area(area, domain)
+        results = []
+        for eid in eids:
+            st = self.hass.states.get(eid)
+            if st:
+                name = st.attributes.get("friendly_name") or eid
+                results.append({"id": eid, "friendly_name": name})
+        return results
+
+    # ----------- Existing Helpers -----------
     @staticmethod
     def _first_str(d: Dict[str, Any], *keys: str) -> Optional[str]:
         for k in keys:
