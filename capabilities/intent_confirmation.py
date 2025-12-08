@@ -5,18 +5,11 @@ from .base import Capability
 
 _LOGGER = logging.getLogger(__name__)
 
-
 class IntentConfirmationCapability(Capability):
-    """
-    Generates a short, natural confirmation sentence using an LLM.
-    Dynamically builds the prompt based on the executed intent.
-    """
-
+    """Generates a short, natural confirmation sentence."""
     name = "intent_confirmation"
     description = "Generates a natural language confirmation for an action."
 
-    # Map intents to a clear, natural description of what just happened.
-    # This guides the LLM to generate the correct confirmation without needing many examples.
     INTENT_DESCRIPTIONS = {
         "HassTurnOn": "The device(s) were turned ON (eingeschaltet/aktiviert/geöffnet).",
         "HassTurnOff": "The device(s) were turned OFF (ausgeschaltet/deaktiviert/geschlossen).",
@@ -25,12 +18,11 @@ class IntentConfirmationCapability(Capability):
         "HassClimateSetTemperature": "Thermostat target temperature was changed.",
         "HassTimerSet": "A timer was successfully set.",
         "HassGetState": "A state or measurement was queried.",
+        "HassTemporaryControl": "The device was switched on/off TEMPORARILY for a specific duration.",
     }
 
     SCHEMA = {
-        "properties": {
-            "response": {"type": "string"}
-        },
+        "properties": {"response": {"type": "string"}},
         "required": ["response"]
     }
 
@@ -43,11 +35,9 @@ class IntentConfirmationCapability(Capability):
         **_: Any
     ) -> Dict[str, Any]:
         
-        # 1. Resolve Friendly Names & Domains
         names = []
         domains = []
-        states = [] # Optional, but helpful context if available
-
+        states = []
         for eid in entity_ids:
             st = self.hass.states.get(eid)
             if st:
@@ -59,12 +49,10 @@ class IntentConfirmationCapability(Capability):
                 domains.append(eid.split(".")[0] if "." in eid else "")
                 states.append("unknown")
         
-        # 2. Filter Parameters
         ignored_keys = {"domain", "service", "entity_id", "area_id"}
         relevant_params = {k: v for k, v in (params or {}).items() if k not in ignored_keys}
 
-        # 3. Build Dynamic System Prompt
-        action_desc = self.INTENT_DESCRIPTIONS.get(intent_name, "An action was performed on the device.")
+        action_desc = self.INTENT_DESCRIPTIONS.get(intent_name, "An action was performed.")
         
         system = f"""You are a smart home assistant.
 Generate a VERY SHORT, natural German confirmation (du-form).
@@ -73,29 +61,23 @@ Generate a VERY SHORT, natural German confirmation (du-form).
 Action: {action_desc}
 
 ## Rules
-1. **Identify the Device:** Use the 'domains' list to identify what the device is (e.g. domain='light' -> "Licht", 'cover' -> "Rollladen").
-2. **Be Specific:** Combine the device type with the name (e.g. "Küche" + light -> "Das Licht in der Küche").
-3. **Be Concise:** Do not say "Okay" or "Erledigt". Just describe the new state.
+1. **Identify the Device:** Use 'domains' + 'devices' (e.g. domain='light', name='Küche' -> "Das Licht in der Küche").
+2. **Be Specific:** Mention duration if available (e.g. "für 10 Minuten").
+3. **Be Concise:** No "Okay". Just the facts.
 
 Return JSON: {{"response": "string"}}
 """
 
-        # 4. Prepare Payload
         payload = {
             "intent": intent_name,
             "devices": names,
             "domains": domains,
-            "params": relevant_params,
-            # We pass states if useful, though intent description implies the target state
-            # "current_states": states 
+            "states": states,
+            "params": relevant_params
         }
 
-        # 5. Generate
         data = await self._safe_prompt({"system": system, "schema": self.SCHEMA}, payload)
+        message = data.get("response", "Aktion ausgeführt.") if isinstance(data, dict) else "Aktion ausgeführt."
         
-        message = "Aktion ausgeführt."
-        if isinstance(data, dict):
-            message = data.get("response", message)
-
         _LOGGER.debug("[IntentConfirmation] Generated: '%s'", message)
         return {"message": message}

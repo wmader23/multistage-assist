@@ -15,10 +15,12 @@ Rules:
 1. One action per string.
 2. "Zu dunkel" -> "Mache Licht heller". "Zu hell" -> "Mache Licht dunkler".
 3. Use specific device names if given.
+4. **CRITICAL:** Preserve time/duration constraints (e.g., "für 5 Minuten", "für 1 Stunde"). Do not remove them.
 
 Examples:
 "Licht im Bad an und Rollo runter" -> ["Schalte Licht im Bad an", "Fahre Rollo runter"]
 "Im Büro ist es zu dunkel" -> ["Mache das Licht im Büro heller"]
+"Schalte das Licht für 10 Minuten an" -> ["Schalte das Licht für 10 Minuten an"]
 """,
         "schema": {
             "type": "array",

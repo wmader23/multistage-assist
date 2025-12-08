@@ -5,6 +5,8 @@ from homeassistant.helpers import intent as ha_intent
 from homeassistant.core import Context
 from homeassistant.components.conversation import ConversationResult
 
+# Import from utils
+from custom_components.multistage_assist.conversation_utils import join_names, normalize_speech_for_tts, parse_duration_string
 from .base import Capability
 
 _LOGGER = logging.getLogger(__name__)
@@ -20,6 +22,9 @@ class IntentExecutorCapability(Capability):
     
     RESOLUTION_KEYS = {"area", "room", "floor", "device_class"}
     BRIGHTNESS_STEP = 20
+    
+    # Script for temporary control
+    SCRIPT_TEMP_CONTROL = "script.temporary_control_generic"
 
     async def run(
         self,
@@ -45,15 +50,15 @@ class IntentExecutorCapability(Capability):
         final_executed_params = params.copy()
         
         for eid in valid_ids:
-            # Determine effective intent
             effective_intent = intent_name
             domain = eid.split(".", 1)[0]
             current_params = params.copy()
 
+            # --- 1. SENSOR LOGIC ---
             if intent_name == "HassClimateGetTemperature" and domain == "sensor":
                 effective_intent = "HassGetState"
 
-            # Relative Brightness Logic
+            # --- 2. LIGHT LOGIC ---
             if intent_name == "HassLightSet" and "brightness" in current_params:
                 val = current_params["brightness"]
                 if val in ("step_up", "step_down"):
@@ -72,6 +77,37 @@ class IntentExecutorCapability(Capability):
                         final_executed_params["brightness"] = new_pct
                     else:
                         current_params.pop("brightness")
+
+            # --- 3. TEMPORARY CONTROL LOGIC ---
+            if intent_name == "HassTemporaryControl":
+                duration_raw = current_params.get("duration")
+                command = current_params.get("command", "on")
+                
+                seconds = parse_duration_string(duration_raw)
+                minutes = int(seconds / 60)
+                if minutes < 1: minutes = 1 # Minimum 1 minute
+                
+                _LOGGER.debug("[IntentExecutor] Calling script %s for %s: %s for %d min", 
+                              self.SCRIPT_TEMP_CONTROL, eid, command, minutes)
+                
+                try:
+                    await hass.services.async_call(
+                        "script", 
+                        "temporary_control_generic", 
+                        {"target_entity": eid, "minutes": minutes, "command": command},
+                        context=Context(),
+                        # Non-blocking so we don't wait for the delay
+                        blocking=False 
+                    )
+                    
+                    # Fake a response for feedback
+                    resp = ha_intent.IntentResponse(language=language)
+                    resp.response_type = ha_intent.IntentResponseType.ACTION_DONE
+                    results.append((eid, resp))
+                    continue # Skip standard async_handle
+                except Exception as e:
+                     _LOGGER.error("Failed to call temporary control script: %s", e)
+                     continue
 
             # Slots
             slots = {"name": {"value": eid}}
@@ -104,7 +140,32 @@ class IntentExecutorCapability(Capability):
 
         final_resp = results[-1][1]
 
-        # Ensure minimal speech so UI doesn't hang, but let CommandProcessor override it
+        # Speech Generation
+        if effective_intent in ("HassGetState", "HassClimateGetTemperature"):
+            current_speech = final_resp.speech.get("plain", {}).get("speech", "") if final_resp.speech else ""
+            
+            if not current_speech or current_speech.strip() == "Okay":
+                parts = []
+                for eid, _ in results:
+                    state_obj = hass.states.get(eid)
+                    if not state_obj: continue
+                    
+                    friendly = state_obj.attributes.get("friendly_name", eid)
+                    val = state_obj.state
+                    unit = state_obj.attributes.get("unit_of_measurement", "")
+                    
+                    if val.replace(".", "", 1).isdigit():
+                        val = val.replace(".", ",")
+
+                    text_part = f"{friendly} ist {val}"
+                    if unit: text_part += f" {unit}"
+                    parts.append(text_part)
+                
+                if parts:
+                    raw_text = join_names(parts) + "."
+                    speech_text = normalize_speech_for_tts(raw_text)
+                    final_resp.async_set_speech(speech_text)
+
         def _has_speech(r):
             s = getattr(r, "speech", None)
             return isinstance(s, dict) and bool(s.get("plain", {}).get("speech"))
