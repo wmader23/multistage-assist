@@ -17,6 +17,7 @@ from .capabilities.memory import MemoryCapability
 from .capabilities.intent_resolution import IntentResolutionCapability
 from .capabilities.timer import TimerCapability
 from .capabilities.command_processor import CommandProcessorCapability
+from .capabilities.vacuum import VacuumCapability
 
 from .conversation_utils import make_response, error_response, with_new_text, filter_candidates_by_state
 from .stage_result import Stage0Result
@@ -41,7 +42,8 @@ class Stage1Processor(BaseStage):
         MemoryCapability,
         IntentResolutionCapability,
         TimerCapability,
-        CommandProcessorCapability
+        CommandProcessorCapability,
+        VacuumCapability
     ]
 
     def __init__(self, hass, config):
@@ -85,12 +87,15 @@ class Stage1Processor(BaseStage):
             if user_input.text.lower().strip() in ("ja", "ja bitte", "gerne", "okay", "mach das"):
                 memory = self.get("memory")
                 src, tgt = pending["source"], pending["target"]
-                if pending.get("learning_type") == "entity":
+                l_type = pending.get("learning_type")
+                
+                if l_type == "entity":
                     await memory.learn_entity_alias(src, tgt)
-                    _LOGGER.info("[Stage1] Learned Entity: %s -> %s", src, tgt)
+                elif l_type == "floor":
+                    await memory.learn_floor_alias(src, tgt)
                 else:
                     await memory.learn_area_alias(src, tgt)
-                    _LOGGER.info("[Stage1] Learned Area: %s -> %s", src, tgt)
+                    
                 return {"status": "handled", "result": await make_response("Alles klar, gemerkt.", user_input)}
             return {"status": "handled", "result": await make_response("Okay, nicht gemerkt.", user_input)}
 
@@ -140,6 +145,11 @@ class Stage1Processor(BaseStage):
                         res
                     )
                 # -----------------------
+
+                # --- VACUUM INTERCEPT ---
+                if intent_name == "HassVacuumStart":
+                     return await self.get("vacuum").run(user_input, intent_name, slots)
+                # ------------------------
 
                 res_data = await self.use("intent_resolution", user_input)
                 if not res_data:

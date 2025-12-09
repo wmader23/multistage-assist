@@ -10,7 +10,7 @@ STORAGE_VERSION = 1
 
 class MemoryCapability(Capability):
     """
-    Saves and loads aliases (e.g. 'Bad' -> 'Badezimmer').
+    Saves and loads aliases for Areas, Entities, and Floors.
     """
     name = "memory"
     
@@ -21,32 +21,29 @@ class MemoryCapability(Capability):
 
     async def _ensure_loaded(self):
         if self._data is None:
-            self._data = await self._store.async_load() or {"areas": {}, "entities": {}}
+            self._data = await self._store.async_load() or {}
+            
             # Ensure structure
-            if "areas" not in self._data: self._data["areas"] = {}
-            if "entities" not in self._data: self._data["entities"] = {}
+            for key in ["areas", "entities", "floors"]:
+                if key not in self._data:
+                    self._data[key] = {}
+            
             _LOGGER.debug("[Memory] Loaded data: %s", self._data)
 
+    # --- AREAS ---
     async def get_area_alias(self, text: str) -> Optional[str]:
-        """Checks if an alias is available for the given input"""
         await self._ensure_loaded()
-        val = self._data["areas"].get(text.lower().strip())
-        if val:
-            _LOGGER.debug("[Memory] Found alias for '%s' -> '%s'", text, val)
-        return val
+        return self._data["areas"].get(text.lower().strip())
 
     async def learn_area_alias(self, text: str, area_name: str):
-        """Saves new alias."""
         await self._ensure_loaded()
         key = text.lower().strip()
-        
         if self._data["areas"].get(key) != area_name:
             self._data["areas"][key] = area_name
             await self._store.async_save(self._data)
             _LOGGER.info("[Memory] Learned Area Alias: '%s' -> '%s'", key, area_name)
-        else:
-            _LOGGER.debug("[Memory] Alias '%s' -> '%s' already known.", key, area_name)
 
+    # --- ENTITIES ---
     async def get_entity_alias(self, text: str) -> Optional[str]:
         await self._ensure_loaded()
         return self._data["entities"].get(text.lower().strip())
@@ -58,3 +55,16 @@ class MemoryCapability(Capability):
             self._data["entities"][key] = entity_id
             await self._store.async_save(self._data)
             _LOGGER.info("[Memory] Learned Entity: '%s' -> '%s'", key, entity_id)
+
+    # --- FLOORS (NEW) ---
+    async def get_floor_alias(self, text: str) -> Optional[str]:
+        await self._ensure_loaded()
+        return self._data["floors"].get(text.lower().strip())
+
+    async def learn_floor_alias(self, text: str, floor_name: str):
+        await self._ensure_loaded()
+        key = text.lower().strip()
+        if self._data["floors"].get(key) != floor_name:
+            self._data["floors"][key] = floor_name
+            await self._store.async_save(self._data)
+            _LOGGER.info("[Memory] Learned Floor Alias: '%s' -> '%s'", key, floor_name)

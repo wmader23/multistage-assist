@@ -12,7 +12,6 @@ _LOGGER = logging.getLogger(__name__)
 class IntentResolutionCapability(Capability):
     """
     Orchestrates the resolution of a single command string into an Intent + Entities.
-    Combines KeywordIntent, EntityResolver, AreaAlias, and Memory logic.
     """
 
     name = "intent_resolution"
@@ -49,95 +48,101 @@ JSON: {"entity_id": <string or null>}
         self.alias_cap = AreaAliasCapability(hass, config)
         self.memory_cap = MemoryCapability(hass, config)
 
+    async def _resolve_alias(self, user_input, text: str, mode: str) -> tuple[Optional[str], bool]:
+        """Helper to resolve Area or Floor alias using Memory -> LLM."""
+        if not text: return None, False
+        
+        # 1. Memory
+        if mode == "floor":
+            mapped = await self.memory_cap.get_floor_alias(text)
+        else:
+            mapped = await self.memory_cap.get_area_alias(text)
+            
+        if mapped:
+            _LOGGER.debug("[IntentResolution] Memory hit (%s): '%s' -> '%s'", mode, text, mapped)
+            return mapped, False
+
+        # 2. LLM
+        res = await self.alias_cap.run(user_input, search_text=text, mode=mode)
+        mapped = res.get("match")
+        
+        if mapped:
+            return mapped, True
+            
+        return None, False
+
     async def run(self, user_input, **_: Any) -> Dict[str, Any]:
         ki_data = await self.keyword_cap.run(user_input)
         intent_name = ki_data.get("intent")
         slots = ki_data.get("slots") or {}
 
         if not intent_name:
-            _LOGGER.debug("[IntentResolution] No intent found.")
             return {}
 
         entity_ids = []
         name_slot = slots.get("name")
+        area_slot = slots.get("area")
+        floor_slot = slots.get("floor")
         
-        # 2. CHECK MEMORY FOR ENTITY ALIAS (Fast Path)
+        learning_data = None
+        new_slots = slots.copy()
+
+        # 1. Resolve FLOOR (New)
+        if floor_slot:
+            mapped_floor, is_new_floor = await self._resolve_alias(user_input, floor_slot, "floor")
+            if mapped_floor:
+                new_slots["floor"] = mapped_floor
+                if is_new_floor:
+                    learning_data = {"type": "floor", "source": floor_slot, "target": mapped_floor}
+        
+        # 2. Resolve AREA (If Floor didn't already trigger learning)
+        if area_slot and not learning_data:
+            mapped_area, is_new_area = await self._resolve_alias(user_input, area_slot, "area")
+            if mapped_area:
+                if mapped_area == "GLOBAL":
+                    new_slots.pop("area", None)
+                    if new_slots.get("name") == area_slot: new_slots.pop("name")
+                else:
+                    new_slots["area"] = mapped_area
+                    if new_slots.get("name") == area_slot: new_slots.pop("name")
+                
+                if is_new_area and mapped_area != "GLOBAL":
+                    learning_data = {"type": "area", "source": area_slot, "target": mapped_area}
+
+        # 3. Check Entity Memory (Fast Path)
         if name_slot:
             known_eid = await self.memory_cap.get_entity_alias(name_slot)
-            if known_eid:
-                if self.hass.states.get(known_eid):
-                    _LOGGER.debug("[IntentResolution] Memory hit! Entity '%s' -> %s", name_slot, known_eid)
-                    entity_ids = [known_eid]
+            if known_eid and self.hass.states.get(known_eid):
+                 entity_ids = [known_eid]
 
-        # 3. Resolve Entities (Standard)
+        # 4. Standard Resolution (with potentially updated Area/Floor)
         if not entity_ids:
-            er_data = await self.resolver_cap.run(user_input, entities=slots)
+            er_data = await self.resolver_cap.run(user_input, entities=new_slots)
             entity_ids = er_data.get("resolved_ids") or []
 
-        learning_data = None
-
-        # 4. Fallback: Area Alias + Entity Match
-        if not entity_ids:
-            candidate_area = slots.get("area")
-            
-            if candidate_area:
-                mapped_area = await self.memory_cap.get_area_alias(candidate_area)
-                is_new_area = False
-                
-                if not mapped_area:
-                    alias_res = await self.alias_cap.run(user_input, search_text=candidate_area)
-                    mapped_area = alias_res.get("area")
-                    if mapped_area:
-                        is_new_area = True
-
-                if mapped_area:
-                    new_slots = slots.copy()
-                    if mapped_area == "GLOBAL":
-                        new_slots.pop("area", None)
-                    else:
-                        new_slots["area"] = mapped_area
-                    
-                    if new_slots.get("name") == candidate_area:
-                        new_slots.pop("name")
-                    
-                    er_data = await self.resolver_cap.run(user_input, entities=new_slots)
-                    entity_ids = er_data.get("resolved_ids") or []
-                    
-                    # --- ENTITY ALIAS LEARNING (The Fix) ---
-                    if not entity_ids and name_slot and mapped_area != "GLOBAL":
-                        _LOGGER.debug("[IntentResolution] Trying to match name '%s' within area '%s'", name_slot, mapped_area)
-                        domain = new_slots.get("domain")
-                        area_candidates = self.resolver_cap._entities_in_area_by_name(mapped_area, domain)
-                        
-                        if area_candidates:
-                            payload = {"user_name": name_slot, "candidates": area_candidates}
-                            match_res = await self._safe_prompt(self.ENTITY_MATCH_PROMPT, payload)
-                            matched_eid = match_res.get("entity_id")
-                            
-                            if matched_eid and self.hass.states.get(matched_eid):
-                                entity_ids = [matched_eid]
-                                learning_data = {
-                                    "type": "entity",
-                                    "source": name_slot,
-                                    "target": matched_eid
-                                }
-                                _LOGGER.debug("[IntentResolution] LLM matched '%s' -> %s", name_slot, matched_eid)
-
-                    if entity_ids and is_new_area and not learning_data and mapped_area != "GLOBAL":
-                         learning_data = {
-                             "type": "area",
-                             "source": candidate_area,
-                             "target": mapped_area
-                         }
-                    slots = new_slots
+        # 5. Entity Alias Fallback (LLM Match in Area)
+        if not entity_ids and name_slot and new_slots.get("area"):
+             # ... (Keep existing "Spiegellicht" logic) ...
+             # Re-using the logic from previous step
+             target_area = new_slots["area"]
+             domain = new_slots.get("domain")
+             area_candidates = self.resolver_cap._entities_in_area_by_name(target_area, domain)
+             
+             if area_candidates:
+                 payload = {"user_name": name_slot, "candidates": area_candidates}
+                 match_res = await self._safe_prompt(self.ENTITY_MATCH_PROMPT, payload)
+                 matched_eid = match_res.get("entity_id")
+                 if matched_eid and self.hass.states.get(matched_eid):
+                     entity_ids = [matched_eid]
+                     if not learning_data:
+                         learning_data = {"type": "entity", "source": name_slot, "target": matched_eid}
 
         if not entity_ids:
-            _LOGGER.debug("[IntentResolution] Failed to resolve entities for intent %s", intent_name)
             return {}
 
         return {
             "intent": intent_name,
-            "slots": slots,
+            "slots": new_slots,
             "entity_ids": entity_ids,
             "learning_data": learning_data
         }
