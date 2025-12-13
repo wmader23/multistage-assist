@@ -88,6 +88,8 @@ JSON: {"entity_id": <string or null>}
         ki_data = await self.keyword_cap.run(user_input)
         intent_name = ki_data.get("intent")
         slots = ki_data.get("slots") or {}
+        # IMPORTANT: keyword_intent returns domain at top level, not in slots
+        detected_domain = ki_data.get("domain")
 
         if not intent_name:
             return {}
@@ -99,6 +101,15 @@ JSON: {"entity_id": <string or null>}
 
         learning_data = None
         new_slots = slots.copy()
+        
+        # Inject the detected domain into slots for entity_resolver
+        # This ensures area-based lookups filter by the correct entity type
+        if detected_domain and not new_slots.get("domain"):
+            new_slots["domain"] = detected_domain
+            _LOGGER.debug(
+                "[IntentResolution] Injecting domain '%s' from keyword_intent",
+                detected_domain,
+            )
 
         # --- 1. RECOVERY: Check for missed Area in raw text ---
         # If no area/floor extracted, but text might contain one (e.g. "Kinderbad"), try to find it.

@@ -108,7 +108,13 @@ class KeywordIntentCapability(Capability):
         },
         "vacuum": {
             "intents": ["HassVacuumStart"],
-            "rules": "- 'mode': 'mop' if wischen/nass else 'vacuum'.\n- 'area': Room name.\n- 'floor': Floor name.\n- 'scope': 'GLOBAL' if whole house.",
+            "rules": """- 'mode': IMPORTANT mode detection:
+  - 'vacuum' (DEFAULT): saugen, staubsaugen, sauge, staubsauge, absaugen, Staub
+  - 'mop': ONLY if user says wischen, nass, feucht, moppen
+  - If unsure, default to 'vacuum'
+- 'area': Room name if specified.
+- 'floor': Floor name if specified.
+- 'scope': 'GLOBAL' if whole house (überall, ganzes Haus, alles).""",
         },
         "calendar": {
             "intents": ["HassCalendarCreate", "HassCreateEvent"],
