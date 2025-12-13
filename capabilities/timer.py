@@ -33,8 +33,6 @@ Examples:
 "5 Minuten Timer für den Tee" → {"description": "Tee"}
 "Timer für 3 Minuten" → {"description": ""}
 "Stelle einen Timer auf 20 Minuten" → {"description": ""}
-
-Output format: JSON object with single key "description" (2-3 words maximum, or empty string).
 """,
         "schema": {
             "type": "object",

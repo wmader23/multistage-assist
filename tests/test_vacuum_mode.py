@@ -60,13 +60,13 @@ class TestVacuumModeDetection:
     
     @pytest.mark.asyncio
     @pytest.mark.parametrize("input_text", [
-        # Mop commands should trigger vacuum domain
+        # Mop commands should trigger vacuum domain with mode='mop'
         "Wische die Küche",
         "Wischen im Bad",
-        "Nass wischen im Flur",
+        "wische den Keller",
     ])
     async def test_mop_commands_trigger_vacuum_domain(self, keyword_intent_capability, input_text):
-        """Test that mop commands at least trigger the vacuum domain."""
+        """Test that mop commands trigger the vacuum domain with mode='mop'."""
         user_input = make_input(input_text)
         
         result = await keyword_intent_capability.run(user_input)
@@ -76,15 +76,21 @@ class TestVacuumModeDetection:
             f"For '{input_text}': expected domain='vacuum', got: {result.get('domain')}"
         assert result.get("intent") == "HassVacuumStart", \
             f"For '{input_text}': expected intent='HassVacuumStart', got: {result.get('intent')}"
+        
+        # Mode should be 'mop' for wischen commands
+        slots = result.get("slots", {})
+        assert slots.get("mode") == "mop", \
+            f"For '{input_text}': expected mode='mop', got mode='{slots.get('mode')}'"
     
     @pytest.mark.asyncio
     @pytest.mark.parametrize("input_text,expected_area", [
         ("Sauge den Keller", "Keller"),
         ("Staubsauge das Wohnzimmer", "Wohnzimmer"),
         ("Wische die Küche", "Küche"),
+        ("wische den Keller", "Keller"),  # Test article stripping
     ])
     async def test_vacuum_area_extraction(self, keyword_intent_capability, input_text, expected_area):
-        """Test that area is correctly extracted from vacuum commands."""
+        """Test that area is correctly extracted from vacuum commands (without articles)."""
         user_input = make_input(input_text)
         
         result = await keyword_intent_capability.run(user_input)

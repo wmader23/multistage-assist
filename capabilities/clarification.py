@@ -26,11 +26,6 @@ CRITICAL RULES:
 5. **PRESERVE** time/duration constraints (e.g., "für 5 Minuten", "für 1 Stunde").
 6. **SPLIT** opposite actions (an/aus, auf/zu, heller/dunkler) in different locations into separate commands.
 
-Output Format:
-- JSON array of strings
-- ONE command per string
-- If input has "und", output MUST be array with 2+ items
-
 Examples:
 Input: "Licht im Bad an und Rollo runter"
 Output: ["Schalte Licht im Bad an", "Fahre Rollo runter"]

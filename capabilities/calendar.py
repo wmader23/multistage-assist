@@ -44,8 +44,6 @@ Examples:
 "Geburtstag am 25. Dezember ganztägig" → {"summary": "Geburtstag", "start_date": "2023-12-25", "end_date": "2023-12-26", "is_all_day": true}
 "Meeting in 2 Stunden" → {"summary": "Meeting", "start_date_time": "2023-12-13 14:00", "duration_minutes": 60}
 "Arzttermin nächsten Montag 14:30 in der Praxis Dr. Müller" → {"summary": "Arzttermin", "start_date_time": "2023-12-18 14:30", "location": "Praxis Dr. Müller", "duration_minutes": 60}
-
-Output format: JSON object with the extracted fields. Only include fields that are clearly specified.
 """,
         "schema": {
             "type": "object",

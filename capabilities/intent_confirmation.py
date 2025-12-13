@@ -85,8 +85,6 @@ Action: {action_desc}
 
 ## Rules
 {base_rules}
-
-Return JSON: {{"response": "string"}}
 """
 
         payload = {

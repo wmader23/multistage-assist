@@ -83,8 +83,6 @@ Examples:
 - "Gibt es offene Fenster?" → YES (are there open windows?)
 - "Welche Lichter sind an?" → NO (which lights are on?)
 - "Schalte das Licht an" → NO (turn on the light)
-
-Return JSON: {"is_yes_no": true/false}
 """
         data = await self._safe_prompt(
             {"system": system, "schema": self.SCHEMA}, {"text": text}

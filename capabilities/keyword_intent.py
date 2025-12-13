@@ -108,13 +108,16 @@ class KeywordIntentCapability(Capability):
         },
         "vacuum": {
             "intents": ["HassVacuumStart"],
-            "rules": """- 'mode': IMPORTANT mode detection:
-  - 'vacuum' (DEFAULT): saugen, staubsaugen, sauge, staubsauge, absaugen, Staub
-  - 'mop': ONLY if user says wischen, nass, feucht, moppen
-  - If unsure, default to 'vacuum'
-- 'area': Room name if specified.
+            "rules": """CRITICAL - ALWAYS fill 'mode' slot:
+- mode='vacuum': saugen, staubsaugen, sauge, staubsauge, absaugen (DEFAULT)
+- mode='mop': wischen, wische, nass, feucht, moppen, feuchtwischen
+EXAMPLES:
+  "sauge den Keller" → mode='vacuum', area='Keller'
+  "wische die Küche" → mode='mop', area='Küche'
+  "wische den Keller" → mode='mop', area='Keller'
+- 'area': Extract ONLY the room name (without articles like 'den', 'die', 'das', 'im').
 - 'floor': Floor name if specified.
-- 'scope': 'GLOBAL' if whole house (überall, ganzes Haus, alles).""",
+- 'scope': 'GLOBAL' if whole house.""",
         },
         "calendar": {
             "intents": ["HassCalendarCreate", "HassCreateEvent"],
@@ -165,8 +168,6 @@ IMPORTANT:
 - Only fill 'name' if a SPECIFIC device is named.
 - If generic words (Licht, Lampe), leave 'name' EMPTY.
 - For HassGetState: use 'state' slot for queries like "which lights are ON" → {{"state": "on"}}
-
-Return JSON: {{"intent": "...", "slots": {{...}}}}
 """
         data = await self._safe_prompt(
             {"system": system, "schema": self.SCHEMA}, {"user_input": text}
