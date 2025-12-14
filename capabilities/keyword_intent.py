@@ -106,24 +106,15 @@ class KeywordIntentCapability(Capability):
         },
         "timer": {
             "intents": ["HassTimerSet"],
-            "rules": "- duration: seconds or text.\n- name: target device.",
+            "rules": "",
         },
         "vacuum": {
             "intents": ["HassVacuumStart"],
-            "rules": """CRITICAL - ALWAYS fill 'mode' slot:
-- mode='vacuum': saugen, staubsaugen, sauge, staubsauge, absaugen (DEFAULT)
-- mode='mop': wischen, wische, nass, feucht, moppen, feuchtwischen
-EXAMPLES:
-  "sauge den Keller" → mode='vacuum', area='Keller'
-  "wische die Küche" → mode='mop', area='Küche'
-  "wische den Keller" → mode='mop', area='Keller'
-- 'area': Extract ONLY the room name (without articles like 'den', 'die', 'das', 'im').
-- 'floor': Floor name if specified.
-- 'scope': 'GLOBAL' if whole house.""",
+            "rules": "",
         },
         "calendar": {
             "intents": ["HassCalendarCreate", "HassCreateEvent"],
-            "rules": "- 'summary': Event title/name.\n- 'date': Date of event.\n- 'time': Time of event.\n- 'location': Event location.\n- 'calendar': Calendar name.",
+            "rules": "",
         },
         "automation": {
             "intents": [

@@ -45,26 +45,15 @@ class IntentExecutorCapability(Capability):
         
         Returns True on success, False on failure.
         """
-        import uuid
-        
-        # Generate a lowercase scene_id to avoid HA slug validation issues
-        scene_id = f"snapshot_{uuid.uuid4().hex[:16]}"
-        
         _LOGGER.debug(
-            "[IntentExecutor] Calling timebox script for %s: value=%s, action=%s, duration=%dm%ds, scene_id=%s",
+            "[IntentExecutor] Calling timebox script for %s: value=%s, action=%s, duration=%dm%ds",
             entity_id,
             value,
             action,
             minutes,
             seconds,
-            scene_id,
         )
-        data = {
-            "target_entity": entity_id, 
-            "minutes": minutes, 
-            "seconds": seconds,
-            "scene_id": scene_id,  # Pass lowercase scene_id to avoid ULID uppercase issue
-        }
+        data = {"target_entity": entity_id, "minutes": minutes, "seconds": seconds}
         if value is not None:
             data["value"] = value
         if action is not None:

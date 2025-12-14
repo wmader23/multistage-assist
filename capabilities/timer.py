@@ -75,7 +75,6 @@ Examples:
         duration = pending_data.get("duration")
         device_id = pending_data.get("device_id")
         device_name = pending_data.get("name")  # Original query name
-        description = pending_data.get("description", "")  # Already extracted description
 
         text = user_input.text
         learning_data = None
@@ -117,7 +116,8 @@ Examples:
 
         # Recursively call process request to check if we have everything now
         # Pass what we have. If something is still missing, it will ask for the next thing.
-        # Use description from pending_data (already extracted in first turn)
+        # Extract description here too for continue flow
+        description = await self._extract_description(user_input.text)
         res = await self._process_request(
             user_input,
             duration,
@@ -168,7 +168,6 @@ Examples:
                     "step": "ask_duration",
                     "device_id": device_id,
                     "name": device_name,
-                    "description": description,
                 },
             }
 
@@ -204,7 +203,6 @@ Examples:
                             "duration": seconds,  # Pass resolved duration forward
                             "candidates": mobile_services,
                             "name": device_name,  # Keep original name for learning
-                            "description": description,  # Keep description for final call
                         },
                     }
 

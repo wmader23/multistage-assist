@@ -15,15 +15,41 @@ class VacuumCapability(Capability):
     description = "Control vacuum robots."
 
     SCRIPT_ENTITY_ID = "script.vacuum_universal_clean"
+    
+    PROMPT = {
+        "system": """Extract vacuum command details from the user's request.
+
+- mode: 'vacuum' for dry cleaning (saugen, staubsaugen), 'mop' for wet cleaning (wischen, feucht)
+- area: Room name (without articles like 'den', 'die', 'das'), or null if not specified
+- floor: Floor name (Erdgeschoss, Obergeschoss, Keller, etc.), or null if not specified
+- scope: 'GLOBAL' if whole house/apartment mentioned, or null if not specified
+
+Examples:
+"Sauge die Küche" → {"mode": "vacuum", "area": "Küche", "floor": null, "scope": null}
+"Wische den Keller" → {"mode": "mop", "area": "Keller", "floor": null, "scope": null}
+"Staubsauge das Erdgeschoss" → {"mode": "vacuum", "area": null, "floor": "Erdgeschoss", "scope": null}
+"Sauge das ganze Haus" → {"mode": "vacuum", "area": null, "floor": null, "scope": "GLOBAL"}""",
+        "schema": {
+            "properties": {
+                "mode": {"type": "string"},
+                "area": {"type": ["string", "null"]},
+                "floor": {"type": ["string", "null"]},
+                "scope": {"type": ["string", "null"]},
+            }
+        }
+    }
 
     async def run(self, user_input, intent_name: str, slots: Dict[str, Any], **_: Any) -> Dict[str, Any]:
         if intent_name != "HassVacuumStart":
             return {}
 
-        mode = slots.get("mode", "vacuum")
-        scope = slots.get("scope")
-        floor_name = slots.get("floor")
-        area_name = slots.get("area")
+        # Extract vacuum details via LLM
+        extracted = await self._extract_vacuum_details(user_input.text)
+        
+        mode = extracted.get("mode", "vacuum")
+        scope = extracted.get("scope")
+        floor_name = extracted.get("floor")
+        area_name = extracted.get("area")
 
         target_val = None
         
@@ -100,3 +126,15 @@ class VacuumCapability(Capability):
             return mapped
             
         return name # Fallback to original if no mapping found
+
+    async def _extract_vacuum_details(self, text: str) -> Dict[str, Any]:
+        """Extract vacuum details using LLM."""
+        try:
+            result = await self._safe_prompt(
+                self.PROMPT, {"user_input": text}, temperature=0.0
+            )
+            if result and isinstance(result, dict):
+                return result
+        except Exception as e:
+            _LOGGER.debug(f"Failed to extract vacuum details: {e}")
+        return {}
