@@ -535,22 +535,8 @@ Examples:
     
     def _parse_duration(self, duration_str: str) -> Optional[int]:
         """Parse duration string to minutes."""
-        if not duration_str:
-            return None
-        
-        total_minutes = 0
-        text = duration_str.lower()
-        
-        hours_match = re.search(r'(\d+(?:[,\.]\d+)?)\s*(?:stunde|stunden|std|h)', text)
-        if hours_match:
-            hours = float(hours_match.group(1).replace(',', '.'))
-            total_minutes += int(hours * 60)
-        
-        minutes_match = re.search(r'(\d+)\s*(?:minute|minuten|min|m)', text)
-        if minutes_match:
-            total_minutes += int(minutes_match.group(1))
-        
-        return total_minutes if total_minutes > 0 else None
+        from ..utils.duration_utils import parse_duration_to_minutes
+        return parse_duration_to_minutes(duration_str)
     
     def _validate_dates(self, event_data: Dict[str, Any]) -> bool:
         """Validate that date fields are in parseable format."""

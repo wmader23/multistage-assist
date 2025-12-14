@@ -137,37 +137,21 @@ def format_chat_history(history: List[Dict[str, str]], max_words: int = 500) -> 
 
 
 def parse_duration_string(duration: Any) -> int:
-    """Parse duration string/int to seconds."""
-    if not duration:
-        return 0
-    try:
-        return int(duration)
-    except (ValueError, TypeError):
-        pass
-    if isinstance(duration, str):
-        text = duration.lower()
-        m_min = re.search(r"(\d+)\s*(m|min|minute)", text)
-        m_sec = re.search(r"(\d+)\s*(s|sec|sekunde)", text)
-        m_hr = re.search(r"(\d+)\s*(h|std|stunde)", text)
-        total = 0
-        if m_hr:
-            total += int(m_hr.group(1)) * 3600
-        if m_min:
-            total += int(m_min.group(1)) * 60
-        if m_sec:
-            total += int(m_sec.group(1))
-        if total == 0 and text.isdigit():
-            return int(text) * 60
-        return total
-    return 0
+    """Parse duration string/int to seconds.
+    
+    This is a backward-compatible wrapper around the centralized duration utils.
+    """
+    from .utils.duration_utils import parse_german_duration
+    return parse_german_duration(duration)
 
 
 def format_seconds_to_string(seconds: int) -> str:
-    if seconds >= 3600:
-        return f"{seconds/3600:.1f} Stunden"
-    if seconds >= 60:
-        return f"{int(seconds/60)} Minuten"
-    return f"{seconds} Sekunden"
+    """Format seconds to German duration string.
+    
+    This is a backward-compatible wrapper around the centralized duration utils.
+    """
+    from .utils.duration_utils import format_duration_simple
+    return format_duration_simple(seconds)
 
 
 def filter_candidates_by_state(
