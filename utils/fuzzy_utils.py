@@ -6,7 +6,7 @@ Provides centralized fuzzy matching functionality using rapidfuzz library.
 import asyncio
 import importlib
 import logging
-from typing import List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -145,3 +145,112 @@ def fuzzy_match(query: str, candidate: str) -> int:
     # Fallback to difflib
     from difflib import SequenceMatcher
     return int(SequenceMatcher(None, query.lower(), candidate.lower()).ratio() * 100)
+
+
+# German articles and prepositions to remove for fuzzy matching
+GERMAN_ARTICLES = {"der", "die", "das", "den", "dem", "ein", "eine", "einen", "einem", "einer"}
+GERMAN_PREPOSITIONS = {"im", "in", "auf", "unter", "über", "an", "am", "bei", "zum", "zur", "vom", "von"}
+
+
+def normalize_for_fuzzy(text: str) -> str:
+    """Normalize text for fuzzy matching.
+    
+    Removes German articles and prepositions, lowercases, and strips whitespace.
+    
+    Args:
+        text: Input text
+        
+    Returns:
+        Normalized text
+        
+    Example:
+        normalize_for_fuzzy("den Keller") -> "keller"
+        normalize_for_fuzzy("im Wohnzimmer") -> "wohnzimmer"
+    """
+    if not text:
+        return ""
+    
+    words = text.lower().split()
+    filtered = [w for w in words if w not in GERMAN_ARTICLES and w not in GERMAN_PREPOSITIONS]
+    return " ".join(filtered).strip()
+
+
+async def fuzzy_match_candidates(
+    query: str,
+    candidates: List[Dict[str, str]],
+    name_key: str = "name",
+    id_key: str = "entity_id",
+    threshold: int = 70,
+    normalize: bool = True,
+) -> Optional[str]:
+    """Match query against a list of candidate dicts by name then by ID.
+    
+    This is a common pattern used by timer (devices), calendar, and other
+    capabilities that need to match user input to a list of options.
+    
+    Args:
+        query: User's search query
+        candidates: List of dicts, each with at least name_key and id_key
+        name_key: Key in dict for display name (default: "name")
+        id_key: Key in dict for ID/entity_id (default: "entity_id")
+        threshold: Minimum match score (0-100)
+        normalize: Whether to normalize the query (remove articles)
+        
+    Returns:
+        The id_key value of the best match, or None if no match
+        
+    Example:
+        candidates = [
+            {"name": "Family Calendar", "entity_id": "calendar.family"},
+            {"name": "Work Calendar", "entity_id": "calendar.work"},
+        ]
+        result = await fuzzy_match_candidates("family", candidates)
+        # Returns "calendar.family"
+    """
+    if not query or not candidates:
+        return None
+    
+    # Normalize query if requested
+    search_query = normalize_for_fuzzy(query) if normalize else query.lower()
+    
+    # Build lookup dicts
+    name_to_id = {c[name_key]: c[id_key] for c in candidates if name_key in c and id_key in c}
+    
+    # Also try matching by the last part of the ID (after the dot)
+    id_part_to_id = {}
+    for c in candidates:
+        if id_key in c:
+            full_id = c[id_key]
+            if "." in full_id:
+                id_part = full_id.split(".")[-1]
+                id_part_to_id[id_part] = full_id
+            else:
+                id_part_to_id[full_id] = full_id
+    
+    # Try matching by name first
+    match_result = await fuzzy_match_best(
+        search_query, list(name_to_id.keys()), threshold=threshold
+    )
+    if match_result:
+        best_match_name, score = match_result
+        _LOGGER.debug(
+            "[FuzzyUtils] Matched name '%s' to '%s' (score: %d)",
+            query, best_match_name, score,
+        )
+        return name_to_id[best_match_name]
+    
+    # Try matching by ID part
+    match_result = await fuzzy_match_best(
+        search_query, list(id_part_to_id.keys()), threshold=threshold
+    )
+    if match_result:
+        best_match_id, score = match_result
+        _LOGGER.debug(
+            "[FuzzyUtils] Matched ID '%s' to '%s' (score: %d)",
+            query, best_match_id, score,
+        )
+        return id_part_to_id[best_match_id]
+    
+    _LOGGER.debug("[FuzzyUtils] No match for '%s' in candidates", query)
+    return None
+

@@ -9,7 +9,7 @@ from custom_components.multistage_assist.conversation_utils import (
     parse_duration_string,
     format_seconds_to_string,
 )
-from ..utils.fuzzy_utils import fuzzy_match_best
+from ..utils.fuzzy_utils import fuzzy_match_candidates
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -307,38 +307,15 @@ Examples:
         self, query: str, candidates: List[Dict[str, str]]
     ) -> Optional[str]:
         """Fuzzy match device from query."""
-        if not query:
-            return None
-        
-        candidate_names = {c["name"]: c["service"] for c in candidates}
-        candidate_ids = {c["service"].split(".")[-1]: c["service"] for c in candidates}
-        
-        # Try matching by name first
-        match_result = await fuzzy_match_best(
-            query, list(candidate_names.keys()), threshold=70
+        # Use centralized fuzzy matching utility
+        # Timer uses "service" instead of "entity_id" for the ID key
+        return await fuzzy_match_candidates(
+            query,
+            candidates,
+            name_key="name",
+            id_key="service",
+            threshold=70,
         )
-        if match_result:
-            best_match_name, score = match_result
-            _LOGGER.debug(
-                "[Timer] Matched device name '%s' to '%s' (score: %d)",
-                query, best_match_name, score,
-            )
-            return candidate_names[best_match_name]
-        
-        # Try matching by service ID
-        match_result = await fuzzy_match_best(
-            query, list(candidate_ids.keys()), threshold=70
-        )
-        if match_result:
-            best_match_id, score = match_result
-            _LOGGER.debug(
-                "[Timer] Matched device ID '%s' to '%s' (score: %d)",
-                query, best_match_id, score,
-            )
-            return candidate_ids[best_match_id]
-        
-        _LOGGER.warning("[Timer] No device match for '%s'", query)
-        return None
     
     async def _set_android_timer(
         self, service_full: str, seconds: int, description: str = ""

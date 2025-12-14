@@ -10,7 +10,7 @@ from homeassistant.components import conversation
 
 from .multi_turn_base import MultiTurnCapability
 from custom_components.multistage_assist.conversation_utils import make_response
-from ..utils.fuzzy_utils import fuzzy_match_best
+from ..utils.fuzzy_utils import fuzzy_match_candidates
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -661,26 +661,11 @@ Examples:
         self, query: str, calendars: List[Dict[str, str]]
     ) -> Optional[str]:
         """Match user input to a calendar using fuzzy matching."""
-        if not query or not calendars:
-            return None
-        
-        calendar_names = {c["name"]: c["entity_id"] for c in calendars}
-        calendar_ids = {c["entity_id"].split(".")[-1]: c["entity_id"] for c in calendars}
-        
-        # Try matching by name
-        match_result = await fuzzy_match_best(
-            query, list(calendar_names.keys()), threshold=60
+        # Use centralized fuzzy matching utility
+        return await fuzzy_match_candidates(
+            query,
+            calendars,
+            name_key="name",
+            id_key="entity_id",
+            threshold=60,
         )
-        if match_result:
-            best_match_name, score = match_result
-            return calendar_names[best_match_name]
-        
-        # Try matching by ID
-        match_result = await fuzzy_match_best(
-            query, list(calendar_ids.keys()), threshold=60
-        )
-        if match_result:
-            best_match_id, score = match_result
-            return calendar_ids[best_match_id]
-        
-        return None
