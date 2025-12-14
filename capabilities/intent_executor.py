@@ -69,6 +69,126 @@ class IntentExecutorCapability(Capability):
                 "[IntentExecutor] Timebox script failed for %s: %s", entity_id, e
             )
             return False
+    
+    # Intent to action mapping for Knowledge Graph
+    INTENT_TO_ACTION = {
+        "HassTurnOn": "turn_on",
+        "HassTurnOff": "turn_off",
+        "HassLightSet": "turn_on",
+        "HassSetPosition": "set_position",
+        "HassClimateSetTemperature": "set_temperature",
+        "HassVacuumStart": "turn_on",
+        "HassMediaPause": "media_pause",
+        "HassMediaResume": "media_play",
+    }
+    
+    async def _resolve_prerequisites(
+        self, entity_ids: List[str], intent_name: str
+    ) -> List[Dict[str, Any]]:
+        """Resolve and execute Knowledge Graph prerequisites for entities.
+        
+        This handles power dependencies and device coupling with AUTO mode.
+        
+        Args:
+            entity_ids: Entities to check
+            intent_name: Intent being executed
+            
+        Returns:
+            List of prerequisites that were executed
+        """
+        try:
+            from ..utils.knowledge_graph import get_knowledge_graph
+        except ImportError:
+            return []
+        
+        action = self.INTENT_TO_ACTION.get(intent_name, "turn_on")
+        graph = get_knowledge_graph(self.hass)
+        
+        executed_prerequisites = []
+        
+        for entity_id in entity_ids:
+            resolution = graph.resolve_for_action(entity_id, action)
+            
+            # Execute AUTO prerequisites
+            for prereq in resolution.prerequisites:
+                prereq_id = prereq["entity_id"]
+                prereq_action = prereq["action"]
+                
+                # Check if already executed
+                if any(p["entity_id"] == prereq_id for p in executed_prerequisites):
+                    continue
+                
+                _LOGGER.info(
+                    "[IntentExecutor] Auto-enabling prerequisite: %s -> %s (for %s)",
+                    prereq_action, prereq_id, entity_id
+                )
+                
+                try:
+                    domain = prereq_id.split(".")[0]
+                    await self.hass.services.async_call(
+                        domain,
+                        prereq_action,
+                        {"entity_id": prereq_id},
+                    )
+                    executed_prerequisites.append({
+                        "entity_id": prereq_id,
+                        "action": prereq_action,
+                        "reason": prereq.get("reason", ""),
+                        "for_entity": entity_id,
+                    })
+                except Exception as e:
+                    _LOGGER.warning(
+                        "[IntentExecutor] Failed to execute prerequisite %s: %s",
+                        prereq_id, e
+                    )
+        
+        
+        # Small delay to allow devices to come online, with smart waiting
+        if executed_prerequisites:
+            import asyncio
+            import time
+            
+            # Wait for up to 5 seconds for prerequisites to reach target state
+            start_time = time.time()
+            pending_checks = list(executed_prerequisites)
+            
+            while pending_checks and (time.time() - start_time) < 5.0:
+                still_pending = []
+                for p in pending_checks:
+                    eid = p["entity_id"]
+                    action = p["action"]
+                    state = self.hass.states.get(eid)
+                    
+                    if not state:
+                        continue
+                        
+                    # Determine target state based on action
+                    is_ready = False
+                    if action == "turn_on":
+                        is_ready = state.state not in ("off", "unavailable", "unknown")
+                    elif action == "turn_off":
+                        is_ready = state.state in ("off", "unavailable")
+                    else:
+                        is_ready = True # Assume ready for other actions
+                        
+                    if not is_ready:
+                        still_pending.append(p)
+                
+                if not still_pending:
+                    break
+                    
+                pending_checks = still_pending
+                await asyncio.sleep(0.5)
+            
+            _LOGGER.debug(
+                "[IntentExecutor] Executed %d prerequisites: %s (Wait time: %.2fs)",
+                len(executed_prerequisites),
+                [p["entity_id"] for p in executed_prerequisites],
+                time.time() - start_time
+            )
+        
+        return executed_prerequisites
+
 
     async def run(
         self,
@@ -128,8 +248,17 @@ class IntentExecutorCapability(Capability):
                         )
                     }
 
+        # --- PHASE 2: Resolve Knowledge Graph Prerequisites ---
+        # Handle power dependencies (AUTO mode) before executing main intent
+        executed_prerequisites = []
+        if intent_name not in ("HassGetState",):  # Skip for queries
+            executed_prerequisites = await self._resolve_prerequisites(
+                valid_ids, intent_name
+            )
+
         results: List[tuple[str, ha_intent.IntentResponse]] = []
         final_executed_params = params.copy()
+        final_executed_params["_prerequisites"] = executed_prerequisites  # For confirmation
         timebox_failures: List[str] = []  # Track failed timebox calls
 
         for eid in valid_ids:
@@ -424,11 +553,36 @@ class IntentExecutorCapability(Capability):
         verified = True
         
         # Check on/off state
+        # Check on/off state
         if expected_state:
-            if state.state.lower() != expected_state.lower():
+            current = state.state.lower()
+            expected = expected_state.lower()
+            
+            # Special handling for covers
+            if entity_id.startswith("cover."):
+                # Map 'on' (intent) to 'open' (state)
+                if expected == "on":
+                    expected = "open"
+                elif expected == "off":
+                    expected = "closed"
+                    
+                # Accept transitional states
+                if expected == "open" and current in ("open", "opening"):
+                    pass # Valid
+                elif expected == "closed" and current in ("closed", "closing"):
+                    pass # Valid
+                elif current != expected:
+                     _LOGGER.warning(
+                        "[IntentExecutor] Verification FAILED for %s: expected state '%s', got '%s'",
+                        entity_id, expected, current
+                    )
+                     verified = False
+            
+            # Standard entities
+            elif current != expected:
                 _LOGGER.warning(
                     "[IntentExecutor] Verification FAILED for %s: expected state '%s', got '%s'",
-                    entity_id, expected_state, state.state
+                    entity_id, expected, current
                 )
                 verified = False
         

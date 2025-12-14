@@ -118,7 +118,7 @@ Examples:
                 return a.name
 
         # Ask LLM for alias
-        alias_cap = AreaAliasCapability(self.hass, {})
+        alias_cap = AreaAliasCapability(self.hass, self.config)
         res = await alias_cap.run(user_input, search_text=name)
         mapped = res.get("area")
         

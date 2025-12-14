@@ -554,46 +554,15 @@ Examples:
     
     def _get_calendar_entities(self) -> List[Dict[str, str]]:
         """Get all calendar entities exposed to the conversation/assist integration."""
-        calendars = []
+        from ..utils.service_discovery import get_entities_by_domain
         
-        # Get calendar entity IDs
-        try:
-            entity_ids = self.hass.states.async_entity_ids("calendar")
-        except Exception:
-            # Fallback for different mock setups
-            entity_ids = []
-            try:
-                for state in self.hass.states.async_all("calendar"):
-                    entity_ids.append(state.entity_id)
-            except Exception:
-                pass
+        entities = get_entities_by_domain(self.hass, "calendar", check_exposure=True)
         
-        # Check exposure (gracefully handle test mocks)
-        try:
-            from homeassistant.components.conversation import async_should_expose
-            use_exposure_check = True
-        except ImportError:
-            use_exposure_check = False
-        
-        for entity_id in entity_ids:
-            # Check exposure if available
-            if use_exposure_check:
-                try:
-                    if not async_should_expose(self.hass, "conversation", entity_id):
-                        continue
-                except Exception:
-                    pass  # Skip exposure check if it fails
-            
-            # Get state and attributes
-            state = self.hass.states.get(entity_id)
-            if state:
-                name = state.attributes.get("friendly_name", entity_id.split(".")[-1])
-                calendars.append({
-                    "entity_id": entity_id,
-                    "name": name,
-                })
-        
-        return calendars
+        # Return just entity_id and name (matching expected format)
+        return [
+            {"entity_id": e["entity_id"], "name": e["name"]}
+            for e in entities
+        ]
     
     async def _fuzzy_match_calendar(
         self, query: str, calendars: List[Dict[str, str]]

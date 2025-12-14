@@ -280,15 +280,8 @@ Examples:
     
     def _get_mobile_notify_services(self) -> List[Dict[str, str]]:
         """Get list of mobile app notification services."""
-        services = self.hass.services.async_services().get("notify", {})
-        return [
-            {
-                "service": f"notify.{k}",
-                "name": k.replace("mobile_app_", "").replace("_", " ").title(),
-            }
-            for k in services
-            if k.startswith("mobile_app_")
-        ]
+        from ..utils.service_discovery import get_mobile_notify_services
+        return get_mobile_notify_services(self.hass)
     
     def _get_device_friendly_name(self, device_id: str) -> str:
         """Get friendly name for a device."""

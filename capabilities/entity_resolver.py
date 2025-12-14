@@ -197,12 +197,29 @@ class EntityResolverCapability(Capability):
             if async_should_expose(hass, CONVERSATION_DOMAIN, eid)
         ]
 
+        # Phase 1: Filter by Knowledge Graph usability (dependencies)
+        # Entities with unmet dependencies (e.g., Ambilight when TV off) are filtered
+        filtered_by_deps = []
+        try:
+            from ..utils.knowledge_graph import get_knowledge_graph
+            graph = get_knowledge_graph(hass)
+            resolved, filtered_by_deps = graph.filter_candidates_by_usability(resolved)
+            
+            if filtered_by_deps:
+                _LOGGER.debug(
+                    "[EntityResolver] Filtered %d entities with unmet dependencies: %s",
+                    len(filtered_by_deps), filtered_by_deps
+                )
+        except Exception as e:
+            _LOGGER.debug("[EntityResolver] Knowledge graph filtering failed: %s", e)
+
         _LOGGER.debug(
-            "[EntityResolver] Final Result: %d entities (pre-filter: %d)",
+            "[EntityResolver] Final Result: %d entities (pre-filter: %d, filtered by deps: %d)",
             len(resolved),
             pre_count,
+            len(filtered_by_deps),
         )
-        return {"resolved_ids": resolved}
+        return {"resolved_ids": resolved, "filtered_by_deps": filtered_by_deps}
 
     # --- NEW HELPER ---
     def _entities_in_area_by_name(
