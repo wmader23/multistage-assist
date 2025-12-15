@@ -4,6 +4,40 @@ Complete reference of all available capabilities in MultiStage Assist.
 
 ## Core Capabilities
 
+### semantic_cache
+
+**Purpose:** Cache successful commands as embeddings for instant replay.
+
+**Input:** User input text
+
+**Output:** Cached resolution or None
+
+**Features:**
+- Uses Ollama embeddings (`mxbai-embed-large` recommended)
+- Cosine similarity matching (threshold: 0.85)
+- Stores only verified successful commands
+- Skips short disambiguation responses (< 3 words)
+- Preserves disambiguation context for re-prompting
+- LRU eviction (max 200 entries)
+
+**Config Options:**
+- `embedding_ip`: Ollama host (defaults to stage1_ip)
+- `embedding_port`: Ollama port (defaults to stage1_port)
+- `embedding_model`: Model name (default: `mxbai-embed-large`)
+- `cache_similarity_threshold`: Min similarity (default: 0.85)
+- `cache_max_entries`: Max cache size (default: 200)
+- `cache_enabled`: Enable/disable (default: true)
+
+**Log Messages:**
+```
+[SemanticCache] HIT (0.92): 'HassTurnOn' -> ['light.kuche']
+[SemanticCache] Stored: 'Licht in der Küche an' -> HassTurnOn
+[SemanticCache] SKIP too short (2 words): 'Die Spots'
+[SemanticCache] SKIP disambig response: 'Küche'
+```
+
+---
+
 ### clarification
 
 **Purpose:** Split compound commands and transform implicit commands.
