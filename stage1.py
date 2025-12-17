@@ -157,6 +157,7 @@ class Stage1Processor(BaseStage):
                         cached["intent"],
                         {k: v for k, v in cached["slots"].items() if k not in ("name", "entity_id")},
                         None,  # No learning data from cache
+                        from_cache=True,  # Skip re-storing cache hits
                     )
                     return self._handle_processor_result(key, res)
 

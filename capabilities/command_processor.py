@@ -50,6 +50,7 @@ class CommandProcessorCapability(Capability):
         params: Dict[str, Any],
         learning_data=None,
         agent=None,
+        from_cache: bool = False,  # Skip storing if this came from cache lookup
     ) -> Dict[str, Any]:
         """Main entry point to process a command with candidate entities."""
 
@@ -61,7 +62,8 @@ class CommandProcessorCapability(Capability):
         # 2. Single Candidate Optimization
         if len(candidates) == 1:
             return await self._execute_final(
-                user_input, candidates, intent_name, params, learning_data
+                user_input, candidates, intent_name, params, learning_data,
+                from_cache=from_cache,
             )
 
         # 3. Filter by State FIRST (before plural detection)
@@ -72,14 +74,16 @@ class CommandProcessorCapability(Capability):
         # Check single after filtering
         if len(final_candidates) == 1:
             return await self._execute_final(
-                user_input, final_candidates, intent_name, params, learning_data
+                user_input, final_candidates, intent_name, params, learning_data,
+                from_cache=from_cache,
             )
 
         # 4. Plural Detection (on filtered candidates)
         pd = await self.plural.run(user_input) or {}
         if pd.get("multiple_entities") is True:
             return await self._execute_final(
-                user_input, final_candidates, intent_name, params, learning_data
+                user_input, final_candidates, intent_name, params, learning_data,
+                from_cache=from_cache,
             )
 
         # 5. Disambiguation
@@ -129,6 +133,7 @@ class CommandProcessorCapability(Capability):
     async def _execute_final(
         self, user_input, entity_ids, intent_name, params, learning_data=None,
         is_disambiguation_response: bool = False,
+        from_cache: bool = False,
     ):
         exec_data = await self.executor.run(
             user_input, intent_name=intent_name, entity_ids=entity_ids, params=params
@@ -179,8 +184,10 @@ class CommandProcessorCapability(Capability):
             }
 
         # --- Semantic Cache Storage ---
-        # Only cache if execution was verified successful (no error flag)
-        if self.semantic_cache and not exec_data.get("error"):
+        # Only cache if:
+        # 1. Execution was verified successful (no error flag)
+        # 2. Command did NOT come from cache (avoid re-caching potentially wrong entries)
+        if self.semantic_cache and not exec_data.get("error") and not from_cache:
             try:
                 await self.semantic_cache.store(
                     text=user_input.text,

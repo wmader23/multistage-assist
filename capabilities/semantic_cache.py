@@ -78,38 +78,102 @@ class CacheEntry:
     generated: bool = False  # True = pre-generated entry (from anchors.json)
 
 
-# Anchor phrase patterns for each intent (German)
-# Maps intent → list of (pattern, extra_slots) tuples
-# extra_slots will be merged into the cache entry slots
-# NOTE: HassTurnOn/HassTurnOff work for multiple domains:
-#   - light/switch/fan: on/off
-#   - cover: open/close (HassTurnOn=open, HassTurnOff=close)
-#   - media_player: on/off
-#   - automation: activate/deactivate
-INTENT_PHRASE_PATTERNS = {
-    # Basic on/off - works for light, switch, fan, media_player, automation, cover
-    "HassTurnOn": [("Schalte {device} in der {area} an", {})],
-    "HassTurnOff": [("Schalte {device} in der {area} aus", {})],
-    # Brightness: explicit phrasing for light domain
-    "HassLightSet": [
-        ("Erhöhe die Helligkeit von {device} in der {area}", {"command": "step_up"}),
-        ("Reduziere die Helligkeit von {device} in der {area}", {"command": "step_down"}),
+# Anchor phrase patterns - 3-tier structure grouped BY DOMAIN
+# ⚠️ RULE: 1 ENTRY per domain + intent for each tier
+# Each tier uses domain-specific phrasing (e.g., "Öffne" for covers vs "Schalte an" for lights)
+#
+#   1. AREA scope: "{device} in {area}" → all entities in area
+#   2. ENTITY scope: "{device} {entity_name} in {area}" → single entity
+#   3. GLOBAL scope: "alle {devices}" → all entities in domain
+#
+# Format: (pattern, intent, extra_slots)
+
+# AREA-SCOPE patterns: {device} + {area} → resolves to all entities in area
+AREA_PHRASE_PATTERNS = {
+    "light": [
+        ("Schalte {device} in {area} an", "HassTurnOn", {}),
+        ("Schalte {device} in {area} aus", "HassTurnOff", {}),
+        ("Erhöhe die Helligkeit von {device} in {area}", "HassLightSet", {"command": "step_up"}),
+        ("Reduziere die Helligkeit von {device} in {area}", "HassLightSet", {"command": "step_down"}),
+        ("Ist {device} in {area} an", "HassGetState", {}),
     ],
-    # Cover position: for intermediate positions (not open/close - use HassTurnOn/Off for that)
-    "HassSetPosition": [
-        ("Stelle {device} in der {area} auf 50 Prozent", {"position": 50}),
+    "cover": [
+        ("Öffne {device} in {area}", "HassTurnOn", {}),
+        ("Schließe {device} in {area}", "HassTurnOff", {}),
+        ("Stelle {device} in {area} auf 50 Prozent", "HassSetPosition", {"position": 50}),
+        ("Ist {device} in {area} offen", "HassGetState", {}),
     ],
-    # Climate
-    "HassClimateSetTemperature": [("Stelle {device} in der {area} auf {temp} Grad", {})],
-    # State queries - work for any domain
-    "HassGetState": [("Ist {device} in der {area} an", {})],
-    # HassTemporaryControl: Handled by keyword detection, not semantic cache
+    "climate": [
+        ("Schalte {device} in {area} an", "HassTurnOn", {}),
+        ("Schalte {device} in {area} aus", "HassTurnOff", {}),
+        ("Stelle {device} in {area} auf 21 Grad", "HassClimateSetTemperature", {}),
+        ("Wie warm ist es in {area}", "HassGetState", {}),
+    ],
+    "switch": [
+        ("Schalte {device} in {area} an", "HassTurnOn", {}),
+        ("Schalte {device} in {area} aus", "HassTurnOff", {}),
+        ("Ist {device} in {area} an", "HassGetState", {}),
+    ],
+    "fan": [
+        ("Schalte {device} in {area} an", "HassTurnOn", {}),
+        ("Schalte {device} in {area} aus", "HassTurnOff", {}),
+        ("Ist {device} in {area} an", "HassGetState", {}),
+    ],
+    "media_player": [
+        ("Schalte {device} in {area} an", "HassTurnOn", {}),
+        ("Schalte {device} in {area} aus", "HassTurnOff", {}),
+        ("Ist {device} in {area} an", "HassGetState", {}),
+    ],
+    "automation": [
+        ("Aktiviere {device} in {area}", "HassTurnOn", {}),
+        ("Deaktiviere {device} in {area}", "HassTurnOff", {}),
+        ("Ist {device} in {area} aktiv", "HassGetState", {}),
+    ],
 }
 
-# Generic device words by domain (for area-based anchor generation)
+# ENTITY-SCOPE patterns: {device} + {entity_name} + {area} → single entity
+ENTITY_PHRASE_PATTERNS = {
+    "light": [
+        ("Schalte {device} {entity_name} in {area} an", "HassTurnOn", {}),
+        ("Schalte {device} {entity_name} in {area} aus", "HassTurnOff", {}),
+        ("Erhöhe die Helligkeit von {device} {entity_name} in {area}", "HassLightSet", {"command": "step_up"}),
+        ("Reduziere die Helligkeit von {device} {entity_name} in {area}", "HassLightSet", {"command": "step_down"}),
+        ("Ist {device} {entity_name} in {area} an", "HassGetState", {}),
+    ],
+    "cover": [
+        ("Öffne {device} {entity_name} in {area}", "HassTurnOn", {}),
+        ("Schließe {device} {entity_name} in {area}", "HassTurnOff", {}),
+        ("Stelle {device} {entity_name} in {area} auf 50 Prozent", "HassSetPosition", {"position": 50}),
+        ("Ist {device} {entity_name} in {area} offen", "HassGetState", {}),
+    ],
+    "climate": [
+        ("Schalte {device} {entity_name} in {area} an", "HassTurnOn", {}),
+        ("Schalte {device} {entity_name} in {area} aus", "HassTurnOff", {}),
+        ("Stelle {device} {entity_name} in {area} auf 21 Grad", "HassClimateSetTemperature", {}),
+    ],
+    "switch": [
+        ("Schalte {device} {entity_name} in {area} an", "HassTurnOn", {}),
+        ("Schalte {device} {entity_name} in {area} aus", "HassTurnOff", {}),
+        ("Ist {device} {entity_name} in {area} an", "HassGetState", {}),
+    ],
+    "fan": [
+        ("Schalte {device} {entity_name} in {area} an", "HassTurnOn", {}),
+        ("Schalte {device} {entity_name} in {area} aus", "HassTurnOff", {}),
+    ],
+    "media_player": [
+        ("Schalte {device} {entity_name} in {area} an", "HassTurnOn", {}),
+        ("Schalte {device} {entity_name} in {area} aus", "HassTurnOff", {}),
+    ],
+    "automation": [
+        ("Aktiviere {device} {entity_name} in {area}", "HassTurnOn", {}),
+        ("Deaktiviere {device} {entity_name} in {area}", "HassTurnOff", {}),
+    ],
+}
+
+# Generic device words by domain
 DOMAIN_DEVICE_WORDS = {
     "light": "das Licht",
-    "cover": "die Rollos",
+    "cover": "die Rollläden",
     "climate": "die Heizung",
     "switch": "den Schalter",
     "fan": "den Ventilator",
@@ -118,22 +182,20 @@ DOMAIN_DEVICE_WORDS = {
     "automation": "die Automatisierung",
 }
 
-# Global patterns - domain-wide commands without area restriction
-# These create cache entries with domain but no area
+# GLOBAL-SCOPE patterns: Domain-wide commands without area restriction
+# ⚠️ RULE: 1 ENTRY per domain + intent (same as AREA and ENTITY patterns)
+# Format: (text, intent, extra_slots)
 GLOBAL_PHRASE_PATTERNS = {
     "light": [
         ("Schalte alle Lichter aus", "HassTurnOff", {}),
         ("Schalte alle Lichter an", "HassTurnOn", {}),
-        ("Alle Lichter aus", "HassTurnOff", {}),
-        ("Alle Lichter an", "HassTurnOn", {}),
+        ("Mach alle Lichter heller", "HassLightSet", {"command": "step_up"}),
+        ("Mach alle Lichter dunkler", "HassLightSet", {"command": "step_down"}),
     ],
     "cover": [
-        ("Schließe alle Rollos", "HassTurnOff", {}),  # Close = TurnOff
-        ("Öffne alle Rollos", "HassTurnOn", {}),  # Open = TurnOn
-        ("Alle Rollos runter", "HassTurnOff", {}),
-        ("Alle Rollos hoch", "HassTurnOn", {}),
-        ("Alle Rollläden runter", "HassTurnOff", {}),
-        ("Alle Rollläden hoch", "HassTurnOn", {}),
+        ("Schließe alle Rollläden", "HassTurnOff", {}),  # Close = TurnOff
+        ("Öffne alle Rollläden", "HassTurnOn", {}),  # Open = TurnOn
+        ("Stelle alle Rollläden auf 50 Prozent", "HassSetPosition", {"position": 50}),
     ],
     "switch": [
         ("Schalte alle Schalter aus", "HassTurnOff", {}),
@@ -146,11 +208,8 @@ GLOBAL_PHRASE_PATTERNS = {
     "media_player": [
         ("Schalte alle Fernseher aus", "HassTurnOff", {}),
         ("Schalte alle Fernseher an", "HassTurnOn", {}),
-        ("Alle Fernseher aus", "HassTurnOff", {}),
     ],
     "automation": [
-        ("Schalte alle Automatisierungen aus", "HassTurnOff", {}),
-        ("Schalte alle Automatisierungen an", "HassTurnOn", {}),
         ("Deaktiviere alle Automatisierungen", "HassTurnOff", {}),
         ("Aktiviere alle Automatisierungen", "HassTurnOn", {}),
     ],
@@ -485,72 +544,85 @@ class SemanticCacheCapability(Capability):
 
         new_anchors = []
         
-        # Estimate: areas × patterns per domain (not entities × patterns)
-        estimated_total = 0
-        for domain in entities_by_domain_area:
-            domain_intents = intent_data.get(domain, {}).get("intents", [])
-            patterns_for_domain = sum(
-                len(INTENT_PHRASE_PATTERNS.get(i, [])) for i in domain_intents
-            )
-            area_count = len(entities_by_domain_area[domain])  # Count areas, not entities
-            estimated_total += area_count * patterns_for_domain
+        # Track processed area+domain+intent combinations for area-scope (avoid duplicates)
+        processed_area_domain_intent = set()
         
-        _LOGGER.info("[SemanticCache] Estimated ~%d anchors to generate", estimated_total)
-        
-        processed_areas = set()
+        _LOGGER.info("[SemanticCache] Generating anchors...")
 
-        # Generate entity-specific anchors
+        # Generate AREA-SCOPE and ENTITY-SCOPE anchors
         if entities_by_domain_area:
             for domain, areas_entities in entities_by_domain_area.items():
-                intents = intent_data.get(domain, {}).get("intents", [])
+                device_word = DOMAIN_DEVICE_WORDS.get(domain, f"das {domain}")
+                
+                # Get domain-specific patterns
+                area_patterns = AREA_PHRASE_PATTERNS.get(domain, [])
+                entity_patterns = ENTITY_PHRASE_PATTERNS.get(domain, [])
 
-                for intent in intents:
-                    pattern_data = INTENT_PHRASE_PATTERNS.get(intent, [])
-                    if not pattern_data:
+                for area_name, entity_list in areas_entities.items():
+                    if not entity_list:
                         continue
 
-                    for area_name, entity_list in areas_entities.items():
-                        # Skip if no entities in this area for this domain
-                        if not entity_list:
-                            continue
+                    # --- TIER 1: AREA-SCOPE ---
+                    # Create ONE entry per area+domain+intent
+                    for pattern_tuple in area_patterns:
+                        pattern, intent, extra_slots = pattern_tuple
                         
-                        for pattern_tuple in pattern_data:
-                            # Handle (pattern, extra_slots) format
-                            if isinstance(pattern_tuple, tuple):
-                                pattern, extra_slots = pattern_tuple
-                            else:
-                                pattern, extra_slots = pattern_tuple, {}
-                            
-                            # Use generic device word based on domain
-                            device_word = DOMAIN_DEVICE_WORDS.get(domain, f"das {domain}")
+                        area_key = (domain, area_name, intent)
+                        if area_key in processed_area_domain_intent:
+                            continue
+                        processed_area_domain_intent.add(area_key)
+                        
+                        try:
+                            text = pattern.format(area=area_name, device=device_word)
+                        except KeyError:
+                            continue
 
+                        embedding = await self._get_embedding(text)
+                        if embedding is None:
+                            continue
+
+                        slots = {"area": area_name, "domain": domain, **extra_slots}
+                        entry = CacheEntry(
+                            text=text,
+                            embedding=embedding.tolist(),
+                            intent=intent,
+                            entity_ids=[],  # Empty - entity resolution after
+                            slots=slots,
+                            required_disambiguation=False,
+                            disambiguation_options=None,
+                            hits=0,
+                            last_hit="",
+                            verified=True,
+                            is_anchor=False,
+                            generated=True,
+                        )
+                        new_anchors.append(entry)
+
+                    # --- TIER 2: ENTITY-SCOPE ---
+                    # Create ONE entry per entity+intent
+                    for entity_id, entity_name in entity_list:
+                        for pattern_tuple in entity_patterns:
+                            pattern, intent, extra_slots = pattern_tuple
+                            
                             try:
                                 text = pattern.format(
-                                    area=area_name, device=device_word, temp="21"
+                                    area=area_name,
+                                    device=device_word,
+                                    entity_name=entity_name,
                                 )
                             except KeyError:
-                                text = pattern.replace("{area}", area_name).replace(
-                                    "{device}", device_word
-                                )
+                                continue
 
                             embedding = await self._get_embedding(text)
                             if embedding is None:
                                 continue
 
-                            # Build slots - NO entity_ids, just area + domain + extra
-                            # Entity resolution happens AFTER cache hit
-                            slots = {
-                                "area": area_name,
-                                "domain": domain,
-                                **extra_slots,  # Merge command, position, etc.
-                            }
-                            
-                            # Create area-based cache entry
+                            slots = {"area": area_name, "domain": domain, "name": entity_name, **extra_slots}
                             entry = CacheEntry(
                                 text=text,
                                 embedding=embedding.tolist(),
                                 intent=intent,
-                                entity_ids=[],  # Empty! Entity resolution happens after
+                                entity_ids=[entity_id],  # Single entity!
                                 slots=slots,
                                 required_disambiguation=False,
                                 disambiguation_options=None,
@@ -561,17 +633,11 @@ class SemanticCacheCapability(Capability):
                                 generated=True,
                             )
                             new_anchors.append(entry)
-                        
-                        # Log after completing all patterns in an area
-                        if area_name not in processed_areas:
-                            processed_areas.add(area_name)
-                            _LOGGER.info(
-                                "[SemanticCache] ✓ %s done - %d entries",
-                                area_name, len(new_anchors)
-                            )
 
-
-        # Area-based entries: intent + area + domain, entity resolution happens after
+                    _LOGGER.info(
+                        "[SemanticCache] ✓ %s/%s done - %d entries so far",
+                        domain, area_name, len(new_anchors)
+                    )
 
         # Generate global anchors (no area, domain-wide)
         _LOGGER.info("[SemanticCache] Generating global anchors...")
@@ -763,6 +829,13 @@ class SemanticCacheCapability(Capability):
             [f"{p:.3f}" for p in scores],
             best_prob,
         )
+        # Log reranker results with intent for each candidate
+        for i, (score, (_, _, entry)) in enumerate(zip(scores, candidates)):
+            marker = "→ BEST" if i == best_idx else ""
+            _LOGGER.debug(
+                "[SemanticCache] Reranked %d: score=%.3f, intent=%s, text='%s' %s",
+                i + 1, score, entry.intent, entry.text[:40], marker
+            )
 
         return self._process_rerank_result(candidates, best_idx, best_prob)
 
@@ -907,6 +980,12 @@ class SemanticCacheCapability(Capability):
             len(candidates),
             candidates[0][0],
         )
+        # Log each candidate for debugging
+        for i, (score, idx, entry) in enumerate(candidates):
+            _LOGGER.debug(
+                "[SemanticCache] Candidate %d: score=%.3f, intent=%s, text='%s'",
+                i + 1, score, entry.intent, entry.text[:50]
+            )
 
         # Stage 2: Reranking via API
         result = await self._rerank_candidates(text, candidates)

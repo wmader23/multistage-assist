@@ -65,8 +65,7 @@ class IntentConfirmationCapability(Capability):
         # Build base rules
         base_rules = """1. **Identify the Device:** Use the device names from 'devices' list directly. Don't substitute with area names.
 2. **Duration:** ONLY mention duration if 'duration' is explicitly set in params. If duration is null or missing, do NOT mention any time.
-3. **Use Present Tense:** - CORRECT: "Licht ist an.", "Rollladen ist zu."
-   - WRONG: "Licht wurde angeschaltet.", "Rollladen wurde geschlossen."
+3. **Use Future Tense for covers:** - CORRECT: "Rollladen wird geschlossen." - WRONG: "Rollladen ist geschlossen."
 4. **NEVER INVENT:** Do not add information that is not in the params."""
 
         # Add brightness guidance only for HassLightSet
