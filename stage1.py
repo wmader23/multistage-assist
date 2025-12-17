@@ -116,6 +116,50 @@ class Stage1Processor(BaseStage):
         _LOGGER.debug("[Stage1] Input='%s'", user_input.text)
         key = getattr(user_input, "session_id", None) or user_input.conversation_id
 
+        # 0. Check Semantic Cache FIRST (pre-verified entries = no LLM needed!)
+        # Skip if this is a pending response (user answering disambiguation)
+        if key not in self._pending and self.has("semantic_cache"):
+            cache = self.get("semantic_cache")
+            cached = await cache.lookup(user_input.text)
+            if cached:
+                _LOGGER.info(
+                    "[Stage1] Cache HIT (%.3f): %s -> area=%s, domain=%s",
+                    cached["score"], cached["intent"], 
+                    cached["slots"].get("area"), cached["slots"].get("domain")
+                )
+                
+                entity_ids = cached.get("entity_ids") or []
+                
+                # Area-based entry: need to resolve entities
+                if not entity_ids:
+                    slots = cached["slots"]
+                    resolver = self.get("entity_resolver")
+                    result = await resolver.run(
+                        user_input,
+                        entities={
+                            "area": slots.get("area"),
+                            "domain": slots.get("domain"),
+                            "name": slots.get("name"),
+                        }
+                    )
+                    entity_ids = result.get("resolved_ids", [])
+                    _LOGGER.debug(
+                        "[Stage1] Resolved %d entities for area=%s domain=%s",
+                        len(entity_ids), slots.get("area"), slots.get("domain")
+                    )
+                
+                # Now handle like normal Stage0 result - plural check, disambiguation, etc.
+                if entity_ids:
+                    processor = self.get("command_processor")
+                    res = await processor.process(
+                        user_input,
+                        entity_ids,
+                        cached["intent"],
+                        {k: v for k, v in cached["slots"].items() if k not in ("name", "entity_id")},
+                        None,  # No learning data from cache
+                    )
+                    return self._handle_processor_result(key, res)
+
         # 1. Handle Pending
         if key in self._pending:
             _LOGGER.debug("[Stage1] Found pending state for key=%s", key)
@@ -299,7 +343,8 @@ class Stage1Processor(BaseStage):
                     if self.has("semantic_cache"):
                         cache = self.get("semantic_cache")
                         cached = await cache.lookup(user_input.text)
-                        if cached and cached["score"] > 0.9:
+                        if cached:
+                            # Cache hit! lookup() already applied domain-specific thresholds
                             _LOGGER.info(
                                 "[Stage1] Cache HIT (%.3f): %s -> %s",
                                 cached["score"], cached["intent"], cached["entity_ids"]

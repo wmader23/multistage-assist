@@ -25,7 +25,7 @@ class IntentExecutorCapability(Capability):
     description = "Execute a Home Assistant intent for specific targets."
 
     RESOLUTION_KEYS = {"area", "floor", "name", "entity_id"}
-    BRIGHTNESS_STEP = 20  # Percentage to change for step_up/step_down
+    BRIGHTNESS_STEP = 35  # Percentage of current brightness for step_up/step_down
     TIMEBOX_SCRIPT_ENTITY_ID = "script.timebox_entity_state"
 
     def _extract_duration(self, params: Dict[str, Any]) -> tuple[int, int]:
@@ -380,12 +380,12 @@ class IntentExecutorCapability(Capability):
                                 # Light is off, turn on to reasonable brightness
                                 new_pct = 30
                             else:
-                                # Increase by BRIGHTNESS_STEP% of current, minimum 5%
-                                change = max(5, int(cur_pct * self.BRIGHTNESS_STEP / 100))
+                                # Increase by BRIGHTNESS_STEP% of current, minimum 10%
+                                change = max(10, int(cur_pct * self.BRIGHTNESS_STEP / 100))
                                 new_pct = min(100, cur_pct + change)
                         else:
-                            # step_down: reduce by BRIGHTNESS_STEP% of current, minimum 5%
-                            change = max(5, int(cur_pct * self.BRIGHTNESS_STEP / 100))
+                            # step_down: reduce by BRIGHTNESS_STEP% of current, minimum 10%
+                            change = max(10, int(cur_pct * self.BRIGHTNESS_STEP / 100))
                             new_pct = max(0, cur_pct - change)
 
                         current_params["brightness"] = new_pct

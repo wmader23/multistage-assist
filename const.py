@@ -15,3 +15,7 @@ CONF_STAGE2_MODEL = "stage2_model"  # e.g. "gemini-2.0-flash"
 CONF_EMBEDDING_IP = "embedding_ip"
 CONF_EMBEDDING_PORT = "embedding_port"
 CONF_EMBEDDING_MODEL = "embedding_model"
+
+# Reranker: For semantic cache validation
+CONF_RERANKER_IP = "reranker_ip"
+CONF_RERANKER_PORT = "reranker_port"

@@ -32,6 +32,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     agent = MultiStageAssistAgent(hass, effective_config)
     conversation.async_set_agent(hass, entry, agent)
     
+    # Initialize semantic cache in background (non-blocking)
+    # Stage1 is at index 1 in the stages list
+    stage1 = agent.stages[1] if len(agent.stages) > 1 else None
+    if stage1 and hasattr(stage1, 'has') and stage1.has("semantic_cache"):
+        cache = stage1.get("semantic_cache")
+        hass.async_create_task(cache.async_startup())
+    
     # REGISTER UPDATE LISTENER: This makes reconfiguration work!
     # When options are updated, this listener triggers a reload of the integration.
     entry.async_on_unload(entry.add_update_listener(update_listener))

@@ -16,10 +16,14 @@ from .const import (
     CONF_EMBEDDING_IP,
     CONF_EMBEDDING_PORT,
     CONF_EMBEDDING_MODEL,
+    CONF_RERANKER_IP,
+    CONF_RERANKER_PORT,
 )
 
 # Default embedding model (multilingual, good German support)
 DEFAULT_EMBEDDING_MODEL = "mxbai-embed-large"
+# Default reranker hostname for HA addon
+DEFAULT_RERANKER_HOST = "local-semantic-reranker"
 
 
 class MultiStageAssistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -37,6 +41,11 @@ class MultiStageAssistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 user_input[CONF_EMBEDDING_IP] = user_input.get(CONF_STAGE1_IP, "127.0.0.1")
             if not user_input.get(CONF_EMBEDDING_PORT):
                 user_input[CONF_EMBEDDING_PORT] = user_input.get(CONF_STAGE1_PORT, 11434)
+            # Set reranker defaults if not provided
+            if not user_input.get(CONF_RERANKER_IP):
+                user_input[CONF_RERANKER_IP] = DEFAULT_RERANKER_HOST
+            if not user_input.get(CONF_RERANKER_PORT):
+                user_input[CONF_RERANKER_PORT] = 9876
             return self.async_create_entry(title="Multi-Stage Assist", data=user_input)
 
         schema = vol.Schema(
@@ -54,6 +63,10 @@ class MultiStageAssistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_EMBEDDING_IP, default=""): str,  # Empty = use stage1_ip
                 vol.Optional(CONF_EMBEDDING_PORT, default=0): int,  # 0 = use stage1_port
                 vol.Optional(CONF_EMBEDDING_MODEL, default=DEFAULT_EMBEDDING_MODEL): str,
+                
+                # Reranker (Semantic Cache validation)
+                vol.Optional(CONF_RERANKER_IP, default=DEFAULT_RERANKER_HOST): str,
+                vol.Optional(CONF_RERANKER_PORT, default=9876): int,
             }
         )
 
@@ -80,6 +93,11 @@ class MultiStageAssistOptionsFlowHandler(config_entries.OptionsFlow):
                 user_input[CONF_EMBEDDING_IP] = user_input.get(CONF_STAGE1_IP, "127.0.0.1")
             if not user_input.get(CONF_EMBEDDING_PORT) or user_input.get(CONF_EMBEDDING_PORT) == 0:
                 user_input[CONF_EMBEDDING_PORT] = user_input.get(CONF_STAGE1_PORT, 11434)
+            # Set reranker defaults if empty/0
+            if not user_input.get(CONF_RERANKER_IP):
+                user_input[CONF_RERANKER_IP] = DEFAULT_RERANKER_HOST
+            if not user_input.get(CONF_RERANKER_PORT) or user_input.get(CONF_RERANKER_PORT) == 0:
+                user_input[CONF_RERANKER_PORT] = 9876
             return self.async_create_entry(title="", data=user_input)
 
         # Use self.config_entry property (provided by base class)
@@ -89,6 +107,10 @@ class MultiStageAssistOptionsFlowHandler(config_entries.OptionsFlow):
         current_emb_ip = current_config.get(CONF_EMBEDDING_IP) or current_config.get(CONF_STAGE1_IP, "127.0.0.1")
         current_emb_port = current_config.get(CONF_EMBEDDING_PORT) or current_config.get(CONF_STAGE1_PORT, 11434)
         current_emb_model = current_config.get(CONF_EMBEDDING_MODEL, DEFAULT_EMBEDDING_MODEL)
+        
+        # Get current reranker values
+        current_reranker_ip = current_config.get(CONF_RERANKER_IP, DEFAULT_RERANKER_HOST)
+        current_reranker_port = current_config.get(CONF_RERANKER_PORT, 9876)
 
         schema = vol.Schema(
             {
@@ -103,6 +125,10 @@ class MultiStageAssistOptionsFlowHandler(config_entries.OptionsFlow):
                 vol.Optional(CONF_EMBEDDING_IP, default=current_emb_ip): str,
                 vol.Optional(CONF_EMBEDDING_PORT, default=current_emb_port): int,
                 vol.Optional(CONF_EMBEDDING_MODEL, default=current_emb_model): str,
+                
+                # Reranker config
+                vol.Optional(CONF_RERANKER_IP, default=current_reranker_ip): str,
+                vol.Optional(CONF_RERANKER_PORT, default=current_reranker_port): int,
             }
         )
 
