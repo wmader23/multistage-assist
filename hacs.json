@@ -1,6 +1,5 @@
 {
     "name": "Multi-Stage Assist",
-    "hacs": "integration",
     "domains": [
         "conversation"
     ],
