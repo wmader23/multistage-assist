@@ -384,6 +384,7 @@ class Stage1Processor(BaseStage):
                     ki_data = await self.use("keyword_intent", user_input) or {}
                     intent_name = ki_data.get("intent")
                     slots = ki_data.get("slots") or {}
+                    domain = ki_data.get("domain")
 
                     # --- FALLBACK: No domain detected, try entity name matching ---
                     if not intent_name:

@@ -43,7 +43,7 @@ DEFAULT_RERANKER_MODEL = "BAAI/bge-reranker-base"
 # base model score ranges: synonyms ~0.65-0.80, opposites ~0.40, different rooms ~0.35
 DEFAULT_RERANKER_THRESHOLD = 0.70  # Fallback for unknown domains
 DEFAULT_VECTOR_THRESHOLD = 0.4  # Loose filter for candidate selection
-DEFAULT_VECTOR_TOP_K = 5  # Number of candidates to rerank
+DEFAULT_VECTOR_TOP_K = 10  # Number of candidates to rerank
 DEFAULT_MAX_ENTRIES = 200
 MIN_CACHE_WORDS = 3
 
@@ -95,11 +95,14 @@ AREA_PHRASE_PATTERNS = {
         ("Schalte {device} in {area} aus", "HassTurnOff", {}),
         ("Erhöhe die Helligkeit von {device} in {area}", "HassLightSet", {"command": "step_up"}),
         ("Reduziere die Helligkeit von {device} in {area}", "HassLightSet", {"command": "step_down"}),
+        ("Dimme {device} in {area} auf 50 Prozent", "HassLightSet", {"brightness": 50}),
         ("Ist {device} in {area} an", "HassGetState", {}),
     ],
     "cover": [
         ("Öffne {device} in {area}", "HassTurnOn", {}),
         ("Schließe {device} in {area}", "HassTurnOff", {}),
+        ("Fahre {device} in {area} weiter hoch", "HassSetPosition", {"command": "step_up"}),
+        ("Fahre {device} in {area} weiter runter", "HassSetPosition", {"command": "step_down"}),
         ("Stelle {device} in {area} auf 50 Prozent", "HassSetPosition", {"position": 50}),
         ("Ist {device} in {area} offen", "HassGetState", {}),
     ],
@@ -138,11 +141,14 @@ ENTITY_PHRASE_PATTERNS = {
         ("Schalte {device} {entity_name} in {area} aus", "HassTurnOff", {}),
         ("Erhöhe die Helligkeit von {device} {entity_name} in {area}", "HassLightSet", {"command": "step_up"}),
         ("Reduziere die Helligkeit von {device} {entity_name} in {area}", "HassLightSet", {"command": "step_down"}),
+        ("Dimme {device} {entity_name} in {area} auf 50 Prozent", "HassLightSet", {"brightness": 50}),
         ("Ist {device} {entity_name} in {area} an", "HassGetState", {}),
     ],
     "cover": [
         ("Öffne {device} {entity_name} in {area}", "HassTurnOn", {}),
         ("Schließe {device} {entity_name} in {area}", "HassTurnOff", {}),
+        ("Fahre {device} {entity_name} in {area} weiter hoch", "HassSetPosition", {"command": "step_up"}),
+        ("Fahre {device} {entity_name} in {area} weiter runter", "HassSetPosition", {"command": "step_down"}),
         ("Stelle {device} {entity_name} in {area} auf 50 Prozent", "HassSetPosition", {"position": 50}),
         ("Ist {device} {entity_name} in {area} offen", "HassGetState", {}),
     ],
@@ -191,10 +197,13 @@ GLOBAL_PHRASE_PATTERNS = {
         ("Schalte alle Lichter an", "HassTurnOn", {}),
         ("Mach alle Lichter heller", "HassLightSet", {"command": "step_up"}),
         ("Mach alle Lichter dunkler", "HassLightSet", {"command": "step_down"}),
+        ("Dimme alle Lichter auf 50 Prozent", "HassLightSet", {"brightness": 50}),
     ],
     "cover": [
         ("Schließe alle Rollläden", "HassTurnOff", {}),  # Close = TurnOff
         ("Öffne alle Rollläden", "HassTurnOn", {}),  # Open = TurnOn
+        ("Fahre alle Rollläden weiter hoch", "HassSetPosition", {"command": "step_up"}),
+        ("Fahre alle Rollläden weiter runter", "HassSetPosition", {"command": "step_down"}),
         ("Stelle alle Rollläden auf 50 Prozent", "HassSetPosition", {"position": 50}),
     ],
     "switch": [
@@ -577,6 +586,17 @@ class SemanticCacheCapability(Capability):
                         except KeyError:
                             continue
 
+                        if len(text.split()) < MIN_CACHE_WORDS:
+                            _LOGGER.debug("[SemanticCache] Text too short to cache: '%s'", text)
+                            return
+
+                        # Normalize text for Generalized Number Matching
+                        # We store the normalized version (e.g. "50 Prozent") so it matches future queries
+                        text_norm, _ = self._normalize_numeric_value(text)
+                        if text_norm != text:
+                            _LOGGER.debug("[SemanticCache] Generalized Storage: Storing '%s' as '%s'", text, text_norm)
+                            text = text_norm
+
                         embedding = await self._get_embedding(text)
                         if embedding is None:
                             continue
@@ -678,6 +698,43 @@ class SemanticCacheCapability(Capability):
 
         self._anchors_initialized = True
         _LOGGER.info("[SemanticCache] Created and cached %d semantic anchors", len(new_anchors))
+
+    def _normalize_numeric_value(self, text: str) -> Tuple[str, List[Any]]:
+        """
+        Normalize numeric values in text for generalized cache lookup.
+        Returns: (normalized_text, extracted_values)
+        
+        Example: "Setze Rollo auf 75%" -> ("Setze Rollo auf 50 Prozent", [75])
+        """
+        import re
+        extracted = []
+        
+        # Helper to replace and capture
+        def replace_percent(match):
+            val = match.group(1)
+            extracted.append(int(val))
+            return "50 Prozent"
+
+        def replace_temp(match):
+            val = match.group(1)
+            # Handle float or int
+            try:
+                if "." in val or "," in val:
+                    extracted.append(float(val.replace(",", ".")))
+                else:
+                    extracted.append(int(val))
+            except ValueError:
+                pass
+            return "21 Grad"
+            
+        # 1. Percentages: "75%", "75 %", "75 Prozent"
+        text_norm = re.sub(r"(\d+)\s*(?:%|Prozent|prozent)", replace_percent, text, flags=re.IGNORECASE)
+        
+        # 2. Temperatures: "23.5 Grad", "23°", "23 Grad"
+        if text_norm == text: # Only apply if percent didn't match (simplification)
+            text_norm = re.sub(r"(\d+(?:[.,]\d+)?)\s*(?:Grad|°|grad)", replace_temp, text_norm)
+            
+        return text_norm, extracted
 
     async def _save_cache(self):
         """Persist cache to disk (only user-learned entries, not pre-generated)."""
@@ -858,14 +915,8 @@ class SemanticCacheCapability(Capability):
         if best_prob >= threshold:
             # Check if best match is an anchor
             if entry.is_anchor:
-                self._stats["anchor_escalations"] += 1
-                _LOGGER.debug(
-                    "[SemanticCache] ANCHOR HIT: '%s' → escalate to LLM (intent=%s, domain=%s)",
-                    entry.text,
-                    entry.intent,
-                    domain,
-                )
-                return None  # Anchor = escalate to LLM
+                # ...
+                return None
 
             return self._make_result(entry, best_prob, cache_idx, is_reranked=True)
 
@@ -949,19 +1000,28 @@ class SemanticCacheCapability(Capability):
 
         self._stats["total_lookups"] += 1
 
+        # Normalize query for Generalized Number Matching
+        query_norm, query_values = self._normalize_numeric_value(text)
+        if query_norm != text:
+             _LOGGER.debug("[SemanticCache] Generalized Lookup: '%s' -> '%s' [%s]", text, query_norm, query_values)
+        
         # Stage 1: Vector search
-        query_emb = await self._get_embedding(text)
+        _LOGGER.error("DEBUG: Starting vector search for '%s' (norm: '%s')", text, query_norm)
+        query_emb = await self._get_embedding(query_norm)
         if query_emb is None:
             self._stats["cache_misses"] += 1
             return None
 
         similarities = self._cosine_similarity(query_emb, self._embeddings_matrix)
+        _LOGGER.error("DEBUG: Similarities calculated. Max: %s", np.max(similarities))
 
         # Get top-k candidates above loose threshold
         candidates: List[Tuple[float, int, CacheEntry]] = []
         for idx, score in enumerate(similarities):
             if score >= self.vector_threshold:
                 candidates.append((float(score), idx, self._cache[idx]))
+
+        _LOGGER.error("DEBUG: Found %d candidates above threshold %s", len(candidates), self.vector_threshold)
 
         # Sort by score descending
         candidates.sort(key=lambda x: x[0], reverse=True)
@@ -980,31 +1040,42 @@ class SemanticCacheCapability(Capability):
             len(candidates),
             candidates[0][0],
         )
-        # Log each candidate for debugging
-        for i, (score, idx, entry) in enumerate(candidates):
-            _LOGGER.debug(
-                "[SemanticCache] Candidate %d: score=%.3f, intent=%s, text='%s'",
-                i + 1, score, entry.intent, entry.text[:50]
+
+        # Stage 2: Reranking
+        best_result = await self._rerank_candidates(query_norm, candidates)
+
+        if best_result:
+            self._stats["cache_hits"] += 1
+            
+            # generalized number injection:
+            # If we extracted values from query, overwrite the cached slot values
+            if query_values:
+                val = query_values[0] # Assume primary value
+                slots = best_result.get("slots", {})
+                
+                # Update known numeric slots
+                updated = False
+                for key in ["position", "brightness", "temperature", "volume_level", "humidity"]:
+                    if key in slots:
+                        _LOGGER.debug("[SemanticCache] Injecting dynamic value %s into slot '%s'", val, key)
+                        slots[key] = val
+                        updated = True
+                
+                if updated:
+                    best_result["slots"] = slots
+
+            _LOGGER.info(
+                "[SemanticCache] HIT (score=%.3f, reranked=%s): '%s' -> '%s' [%s]",
+                best_result["score"],
+                best_result.get("reranked", False),
+                text[:40],
+                best_result["intent"],
+                best_result["entity_ids"][0] if best_result["entity_ids"] else "?",
             )
+            return best_result
 
-        # Stage 2: Reranking via API
-        result = await self._rerank_candidates(text, candidates)
-
-        if result is None:
-            self._stats["cache_misses"] += 1
-            return None
-
-        self._stats["cache_hits"] += 1
-        _LOGGER.info(
-            "[SemanticCache] HIT (score=%.3f, reranked=%s): '%s' -> '%s' [%s]",
-            result["score"],
-            result.get("reranked", False),
-            text[:40],
-            result["intent"],
-            result["entity_ids"][0] if result["entity_ids"] else "?",
-        )
-
-        return result
+        self._stats["cache_misses"] += 1
+        return None
 
     async def store(
         self,
@@ -1050,8 +1121,12 @@ class SemanticCacheCapability(Capability):
             _LOGGER.debug("[SemanticCache] SKIP: non-repeatable intent %s", intent)
             return
 
-        # Note: step_up/step_down commands ARE cached - the cache stores intent+slots,
-        # and the executor handles brightness calculation at runtime based on current state
+        # Normalize text for Generalized Number Matching
+        # We store the normalized version (e.g. "50 Prozent") so it matches future queries
+        text_norm, _ = self._normalize_numeric_value(text)
+        if text_norm != text:
+             _LOGGER.debug("[SemanticCache] Generalized Storage: Storing '%s' as '%s'", text, text_norm)
+             text = text_norm
 
         await self._load_cache()
 
